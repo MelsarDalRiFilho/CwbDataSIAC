@@ -1,14 +1,20 @@
-"""CLI do pipeline. Os comandos de ingestão, transformação etc. entram nas próximas fases."""
+"""CLI do pipeline."""
 
+from datetime import date, datetime
 from pathlib import Path
 from typing import Annotated
 
+import httpx
 import typer
 
 from cwbdatasiac import __version__
+from cwbdatasiac.config import IngestSettings
+from cwbdatasiac.ingestion.pipeline import run_ingestion
 from cwbdatasiac.observability import configure_logging
 
 app = typer.Typer(help="Pipeline de dados abertos do SIAC 156 de Curitiba.", no_args_is_help=True)
+
+USER_AGENT = f"cwbdatasiac/{__version__} (+https://github.com/MelsarDalRiFilho/CwbDataSIAC)"
 
 
 @app.callback()
@@ -23,3 +29,39 @@ def main(
 def version() -> None:
     """Mostra a versão instalada."""
     typer.echo(__version__)
+
+
+def _parse_date(value: str | None) -> date | None:
+    return datetime.strptime(value, "%Y-%m-%d").date() if value else None
+
+
+@app.command()
+def ingest(
+    data: Annotated[
+        str | None,
+        typer.Option(help="Data do snapshot (AAAA-MM-DD). Padrão: o mais recente."),
+    ] = None,
+    forcar: Annotated[bool, typer.Option(help="Recarrega mesmo se já carregado.")] = False,
+    data_dir: Annotated[Path, typer.Option(help="Diretório de dados.")] = Path("data"),
+    min_bytes: Annotated[int, typer.Option(help="Tamanho mínimo aceito do CSV.")] = 50_000_000,
+    manter_csv_dias: Annotated[int, typer.Option(help="CSVs brutos mantidos em raw/.")] = 3,
+    navegador: Annotated[
+        bool, typer.Option(help="Usa o Playwright como último recurso de descoberta.")
+    ] = True,
+) -> None:
+    """Baixa o snapshot do SIAC 156, valida e grava na camada Bronze."""
+    settings = IngestSettings(
+        data_dir=data_dir,
+        min_bytes=min_bytes,
+        keep_raw_days=manter_csv_dias,
+        use_browser=navegador,
+    )
+    with httpx.Client(
+        timeout=settings.timeout_s, follow_redirects=True, headers={"User-Agent": USER_AGENT}
+    ) as client:
+        execucao = run_ingestion(settings, client, _parse_date(data), force=forcar)
+
+    typer.echo(f"{execucao.status}: {execucao.arquivo or '-'} ({execucao.run_id})")
+    if execucao.status == "falha":
+        typer.echo(f"etapa {execucao.etapa_falha}: {execucao.mensagem}", err=True)
+        raise typer.Exit(code=1)

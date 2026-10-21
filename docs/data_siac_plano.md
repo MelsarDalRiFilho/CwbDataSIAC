@@ -25,7 +25,7 @@ A fonte é ótima para portfólio: CSV público, atualizado todo dia, volume rea
 | Item | O que encontrei |
 | --- | --- |
 | Arquivo atual | `AAAA-MM-DD_156_-_Base_de_Dados.csv`, 123,5 MB e 626.517 linhas em 20/10/2026 (cerca de +2,8 mil linhas/dia) |
-| Frequência | Diária (publicação às 23h30); o arquivo já inclui o próprio dia |
+| Frequência | Diária: o arquivo do dia D é publicado por volta das 05h30 de D+1 e já inclui o próprio dia D |
 | Cobertura | **Confirmado:** acumulado do ano corrente (01/01 até o dia do arquivo), não um incremento |
 | Formato | **Confirmado:** UTF-8 com BOM, CRLF, separador `;`, com um `;` extra no fim da linha (gera a coluna vazia) |
 | Datas | **Confirmado:** `dd/mm/aaaa` **sem hora**, todas válidas; nenhuma `DataResposta` anterior a `DataCriacao`; \~11% sem resposta |
@@ -38,7 +38,7 @@ A fonte é ótima para portfólio: CSV público, atualizado todo dia, volume rea
 | Manifesto | `156.xml` no espelho lista o nome de cada arquivo diário (último: 2026-10-20) |
 | API | Nenhuma |
 
-**Descoberta do link.** No portal, o botão DOWNLOAD não expõe a URL no HTML estático. Mas o `156.xml` já entrega o nome do arquivo do dia, e o espelho C3SL serve os arquivos por HTTP simples. Decisão: `httpx` como caminho principal e **Playwright opcional** (extra `[browser]`), que abre o portal em modo headless e captura a URL real do botão quando o manifesto falhar. Isso mostra a habilidade sem tornar o pipeline frágil.
+**Descoberta do link.** No portal, o botão DOWNLOAD não expõe a URL no HTML estático: ele chama o endpoint JSON `/ConjuntoDado/DownloadArquivos/`, que devolve uma tabela HTML com as URLs oficiais em `mid-dadosabertos.curitiba.pr.gov.br/156/`. O arquivo de lá é idêntico ao do C3SL (mesmo tamanho e `Last-Modified`). A descoberta tenta, em ordem: (1) manifesto `156.xml` do C3SL; (2) endpoint JSON do portal, via `httpx`; (3) **Playwright opcional** (extra `[browser]`), que fecha o tutorial guiado, abre a aba "Dados", clica em DOWNLOAD e lê a tabela do modal. São duas fontes HTTP independentes, e o navegador fica como último recurso caso o JSON do portal mude.
 
 **Resultado da fase 1** ([notebook](../notebooks/00_exploracao.ipynb)): os pontos em aberto foram confirmados na tabela acima. O arquivo de hoje **não** contém exatamente as linhas de ontem: de 19 para 20/10, 275 linhas mudaram campos estáveis ou sumiram, e 3.097 entraram (a maioria do próprio dia, algumas retroativas).
 
@@ -76,7 +76,7 @@ O fluxo segue a arquitetura medalhão; logs, controle de execuções e orquestra
 | 2. Captura | `httpx` + `tenacity` (principal); Playwright opcional, extra `[browser]` (descoberta do link) | Download direto é mais confiável; navegador só onde agrega |
 | 3. Validação da execução | Checagens pós-captura + `logging` estruturado em JSON + tabela de controle | Requisito explícito: detectar falha e gerar log |
 | 4. FastAPI | FastAPI + Pydantic v2, documentação OpenAPI automática | Endpoints de indicadores, filtros e paginação |
-| 5. Armazenamento | Bronze: CSV original + Parquet por data de snapshot. Warehouse: DuckDB | Arquivo único, rápido para 117 MB, zero infraestrutura |
+| 5. Armazenamento | Bronze: Parquet zstd de todo snapshot (\~5,8 MB cada) + CSV bruto só das 3 datas mais recentes. Warehouse: DuckDB | Arquivo único, rápido para 123 MB, zero infraestrutura, sem gastar \~45 GB/ano com CSV |
 | 6. dbt | `dbt-duckdb`, camadas staging, intermediate, marts + modelo incremental de histórico agregado | Mostra modelagem dimensional e materialização incremental, sem chave falsa (ADR 0001) |
 | 7. Validação dos dados | Pandera no contrato de entrada; testes do dbt + `dbt-expectations`; relatório de qualidade | Validação em duas portas: antes de carregar e depois de transformar |
 | 8. Relatório | Quarto (ou Jinja2) gerando HTML/PDF a partir da Gold; `dbt docs` publicado | Relatório analítico com achados + documentação de linhagem |
@@ -96,12 +96,14 @@ A demanda pede que a camada de obtenção valide se o serviço foi executado cor
 
 | Checagem | Regra | Em caso de falha |
 | --- | --- | --- |
-| Descoberta | `156.xml` acessível e com o arquivo do dia (fallback Playwright, se habilitado) | log `ERROR`, etapa `descoberta` |
-| Resposta HTTP | status 200 após os retries do `tenacity` | log `ERROR` com status e tentativas |
-| Conteúdo | `Content-Type` `text/csv`, BOM UTF-8 e tamanho ≥ mínimo configurado (ex.: 50 MB) | arquivo vai para a quarentena |
-| Integridade | sha256 calculado; igual ao último snapshot → status `sem_novidade` (não é erro) | log `WARNING` |
-| Cabeçalho | colunas esperadas presentes (contrato de entrada) | quarentena + log `ERROR` |
-| Volume | contagem de linhas ≥ snapshot anterior (arquivo acumulado do ano), exceto na virada do ano | log `ERROR`, carga não promovida |
+| Descoberta | arquivo do dia encontrado por manifesto → portal JSON → navegador (se habilitado) | log `WARNING` por estratégia; `ERROR`, etapa `descoberta` se todas falharem |
+| Idempotência | snapshot já carregado com sucesso e partição presente → `sem_novidade` sem baixar (`--forcar` recarrega) | — |
+| Resposta HTTP | status 200; 5xx, 429 e erros de rede têm 3 tentativas com backoff; 4xx falha na hora | log `ERROR`, etapa `download` |
+| Conteúdo | `Content-Type` `text/csv`, `text/plain` ou `application/octet-stream` (host oficial); BOM UTF-8; tamanho ≥ 50 MB | quarentena + log `ERROR`, etapa `conteudo` |
+| Cabeçalho | as 11 colunas esperadas, sem faltantes nem extras | quarentena + log `ERROR`, etapa `cabecalho` |
+| Integridade | sha256 igual ao do último snapshot carregado → a fonte não atualizou: `sem_novidade` (não é erro) | log `WARNING` |
+| Leitura | CSV parseável pelo Arrow (nº de colunas consistente) | quarentena + log `ERROR`, etapa `leitura` |
+| Volume | linhas > 0 e ≥ snapshot anterior (arquivo acumulado do ano), exceto na virada do ano | quarentena + log `ERROR`, carga não promovida |
 
 - **Logging estruturado** com `logging` da stdlib e formatter JSON (ou `structlog`), configurado em `observability/logging.py`. A saída vai para o console e para um arquivo rotativo em `logs/`, com `run_id`, etapa, duração e contexto em todas as mensagens.
 - **Tabela de controle `ingestao_execucoes`** no DuckDB: `run_id`, início, fim, status (`sucesso`, `sem_novidade`, `falha`), etapa da falha, mensagem, bytes, linhas e sha256. A API a expõe em `/ingestoes`.
@@ -136,10 +138,14 @@ CwbDataSIAC/
 ├── src/cwbdatasiac/
 │   ├── cli.py                 # typer
 │   ├── observability/logging.py  # logging JSON, run_id, handlers console + arquivo
+│   ├── config.py              # URLs da fonte, colunas esperadas, IngestSettings
 │   ├── ingestion/
-│   │   ├── discovery.py       # manifesto 156.xml + fallback Playwright opcional
-│   │   ├── download.py        # httpx + tenacity, sha256, idempotência
-│   │   ├── checks.py          # checagens pós-captura + registro em ingestao_execucoes
+│   │   ├── pipeline.py        # orquestra as etapas, quarentena e retenção do raw/
+│   │   ├── discovery.py       # manifesto 156.xml → portal JSON → navegador
+│   │   ├── browser.py         # descoberta via Playwright (extra opcional)
+│   │   ├── download.py        # httpx + tenacity, sha256, escrita atômica
+│   │   ├── checks.py          # checagens pós-captura
+│   │   ├── control.py         # tabela controle.ingestao_execucoes
 │   │   └── bronze.py          # CSV → Parquet particionado por snapshot
 │   ├── validation/contracts.py  # schema Pandera da entrada
 │   ├── api/                   # FastAPI: main.py, routers/, schemas.py, db.py
@@ -164,7 +170,7 @@ Oito fases curtas, cada uma terminando num commit que funciona sozinho. Assim o 
 
 1. **Exploração e decisões.** Baixar 2 ou 3 arquivos diários seguidos e o dicionário; perfilar encoding, separador, nulos, cardinalidade e formato das datas; testar se existe uma combinação de colunas que identifica a solicitação. *Pronto quando:* notebook de exploração e um ADR com a chave escolhida. **✅ Concluída em 21/10/2026:** `notebooks/00_exploracao.ipynb` e `docs/adr/0001-chave-e-historico-das-solicitacoes.md`; o Python 3.12 e o grupo `explore` já foram antecipados no `pyproject.toml`.
 2. **Esqueleto e CI.** `uv`, `ruff`, `pytest` + `pytest-cov`, pre-commit, configuração de logging, Makefile, workflow de CI, README inicial. *Pronto quando:* CI verde num repositório vazio de lógica. **✅ Concluída em 21/10/2026:** CLI `cwbdatasiac` (typer), logging JSON com `run_id` em `observability/logging.py`, ruff, pytest com cobertura mínima de 80%, pre-commit, `Makefile` e `.github/workflows/ci.yml`.
-3. **Ingestão, validação da execução e Bronze.** Descoberta pelo manifesto, download com retry e checksum, checagens pós-captura, tabela `ingestao_execucoes`, conversão para Parquet, módulo Playwright opcional como estratégia alternativa. Carga histórica opcional pelo espelho C3SL. *Pronto quando:* `make ingest` é idempotente (rodar duas vezes não duplica) e uma falha simulada (HTTP 500, arquivo truncado, coluna faltando) gera log, registro `falha` e exit code ≠ 0.
+3. **Ingestão, validação da execução e Bronze.** Descoberta pelo manifesto, download com retry e checksum, checagens pós-captura, tabela `ingestao_execucoes`, conversão para Parquet, módulo Playwright opcional como estratégia alternativa. Carga histórica opcional pelo espelho C3SL. *Pronto quando:* `make ingest` é idempotente (rodar duas vezes não duplica) e uma falha simulada (HTTP 500, arquivo truncado, coluna faltando) gera log, registro `falha` e exit code ≠ 0. **✅ Concluída em 21/10/2026:** `cwbdatasiac ingest` / `make ingest`, validado contra a fonte real (cerca de 13 s por carga) e com 50 testes (99% de cobertura). A carga histórica foi adiada: os arquivos antigos têm outro layout e serão tratados depois do dbt.
 4. **Contrato e validação de entrada.** Schema Pandera (colunas, tipos, datas válidas, domínios de Situação e Origem); carga rejeitada vai para quarentena com relatório. *Pronto quando:* um CSV com coluna faltando falha com mensagem clara.
 5. **dbt.** Staging, dimensões, fato do último snapshot, histórico agregado incremental e agregados; testes `not_null`, `unique`, `accepted_values`, `relationships` e regras como `DataResposta >= DataCriacao`; `dbt docs`. *Pronto quando:* `dbt build` verde e linhagem publicada.
 6. **FastAPI.** Conexão somente leitura ao DuckDB, modelos Pydantic, filtros, paginação, testes com `TestClient`. *Pronto quando:* `/docs` mostra todos os endpoints e os testes passam.
@@ -187,11 +193,12 @@ O maior risco técnico é a falta de identificador, e ele vira um bom tema para 
 **Decisões tomadas:**
 
 - Python 3.12, para garantir compatibilidade com dbt, Pandera e Quarto.
-- Playwright como módulo opcional de descoberta do link; o caminho principal é `httpx`.
+- Descoberta em cadeia: manifesto C3SL → portal JSON (`httpx`) → Playwright opcional.
+- Bronze guarda o Parquet de todo snapshot e o CSV bruto só das 3 datas mais recentes (`--manter-csv-dias`).
+- Carga histórica (2014–2025) adiada para depois da fase 5.
 - Sem chave por solicitação: fato do último snapshot + histórico agregado incremental ([ADR 0001](adr/0001-chave-e-historico-das-solicitacoes.md)).
 
 **Decisões em aberto** (minhas recomendações entre parênteses):
 
 - DuckDB ou PostgreSQL como warehouse? (DuckDB; Postgres fica como "próximo passo")
 - Dashboard publicado no GitHub Pages com dados estáticos? (sim, é o que dá a demo ao vivo)
-- Carregar o histórico desde 2014 ou só o ano corrente? (começar pelo ano corrente; histórico na fase 3 opcional)
