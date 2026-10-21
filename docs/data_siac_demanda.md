@@ -9,7 +9,7 @@ Aplicar técnicas de engenharia de dados executando o caminho desde a obtenção
 
 -  https://dadosabertos.curitiba.pr.gov.br/conjuntodado/detalhe/?chave=0d5a7b06-3940-4be9-876e-bc8f23e96530
 
-## Detalhamento e tecnologias 
+## Detalhamento e tecnologias
 
 - Desenvolver em python
 - Aplicar camada para obtenção dos dados da fonte, e validar se o serviço foi executado corretamente, caso não seja: gerar log
@@ -20,4 +20,3 @@ Aplicar técnicas de engenharia de dados executando o caminho desde a obtenção
 - Apresentar relatorio e dashboard
 - Dashboard em apache echarts
 - Escrever testes
-

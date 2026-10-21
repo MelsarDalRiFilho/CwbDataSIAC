@@ -4,3 +4,6 @@ __pycache__/
 data/
 logs/
 .idea/
+.coverage
+.pytest_cache/
+.ruff_cache/

@@ -1,10 +1,28 @@
 [project]
 name = "cwbdatasiac"
 version = "0.1.0"
+description = "Pipeline de engenharia de dados sobre os dados abertos do SIAC 156 de Curitiba"
+readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+authors = [{ name = "Melsar José Dal Ri Filho", email = "melsar.filho@gmail.com" }]
+dependencies = [
+    "typer>=0.27.3",
+]
+
+[project.scripts]
+cwbdatasiac = "cwbdatasiac.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [dependency-groups]
+dev = [
+    "pre-commit>=4.7.0",
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.17.1",
+]
 explore = [
     "duckdb>=2.0.0",
     "ipykernel>=7.4.0",
@@ -14,3 +32,28 @@ explore = [
     "pandas>=3.0.6",
     "pyarrow>=26.0.0",
 ]
+
+[tool.uv]
+default-groups = ["dev"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+# O notebook de exploração é um registro de análise, não código de produção.
+extend-exclude = ["notebooks"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=cwbdatasiac --cov-report=term-missing"
+
+[tool.coverage.run]
+branch = true
+source = ["cwbdatasiac"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
