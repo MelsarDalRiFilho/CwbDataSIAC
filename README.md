@@ -39,7 +39,10 @@ Requisitos: [uv](https://docs.astral.sh/uv/) (instala o Python 3.12 automaticame
 make install   # dependências + hooks de pre-commit
 make check     # lint (ruff) + testes (pytest, cobertura mínima de 80%)
 make ingest    # baixa o snapshot mais recente, valida e grava no Bronze
-uv run cwbdatasiac ingest --help
+make transform # dbt build: modelos e testes sobre a Bronze
+make docs      # documentação e linhagem do dbt (dbt/siac156/target/static_index.html)
+make pipeline  # ingest + transform
+uv run cwbdatasiac --help
 ```
 
 ### Ingestão
@@ -62,6 +65,20 @@ o mesmo `run_id` e numa linha da tabela `controle.ingestao_execucoes` (`data/war
 Rodar de novo não duplica nada (status `sem_novidade`). Em caso de falha, o arquivo vai para
 `data/quarentena/`, o log registra a etapa e o motivo, e o comando termina com exit code 1.
 
+### Modelagem (dbt)
+
+`cwbdatasiac transform` roda o projeto `dbt/siac156` (dbt-duckdb) e grava em `data/warehouse.duckdb`:
+
+- `staging.stg_siac156__solicitacoes`: tipagem, padronização de nomes por seed e nenhuma deduplicação.
+- `marts.fct_solicitacoes`: retrato do último snapshot, uma linha por solicitação, sem endereço.
+- `marts.fct_snapshot_agregado`: histórico incremental com contagens por snapshot e dimensões.
+- Dimensões `dim_orgao`, `dim_assunto`, `dim_localidade` (bairro × regional), `dim_origem` e `dim_data`.
+- Agregados `agg_diario` e `agg_tempo_resposta`. Este último mostra os pendentes ao lado da mediana,
+  porque a mediana só enxerga quem já foi respondido.
+
+Os testes de integridade (chaves, relacionamentos, fato e agregado reproduzindo a Bronze) falham o
+build; os de qualidade que o contrato de entrada já tolera só avisam.
+
 Para reexecutar a exploração, baixe os arquivos para `data/raw/` (instruções no início do notebook) e rode `make explore`.
 
 ## Andamento
@@ -72,7 +89,7 @@ Para reexecutar a exploração, baixe os arquivos para `data/raw/` (instruções
 | 2. Esqueleto e CI | ✅ |
 | 3. Ingestão, validação da execução e Bronze | ✅ |
 | 4. Contrato e validação de entrada | ✅ |
-| 5. dbt | ⏳ |
+| 5. dbt | ✅ |
 | 6. FastAPI | ⏳ |
 | 7. Dashboard ECharts e relatório | ⏳ |
 | 8. Automação e vitrine | ⏳ |
@@ -81,7 +98,8 @@ Para reexecutar a exploração, baixe os arquivos para `data/raw/` (instruções
 
 ```
 src/cwbdatasiac/      código do pipeline (CLI typer, ingestão, contrato, logging estruturado)
-tests/                testes pytest
+dbt/siac156/          projeto dbt (staging, marts, seeds, testes)
+tests/                testes pytest (inclui dbt build sobre Bronze sintética)
 notebooks/            exploração da fonte
 docs/                 demanda, plano e decisões (ADRs)
 data/, logs/          gerados localmente, fora do git

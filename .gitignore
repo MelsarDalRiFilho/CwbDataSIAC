@@ -7,3 +7,9 @@ logs/
 .coverage
 .pytest_cache/
 .ruff_cache/
+
+_aux_dev
+# dbt
+dbt/siac156/target/
+dbt/siac156/logs/
+dbt/siac156/dbt_packages/

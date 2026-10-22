@@ -84,7 +84,28 @@ O fluxo segue a arquitetura medalhão; logs, controle de execuções e orquestra
 | 10. Testes | `pytest`, `pytest-cov`, `respx`, `TestClient`, testes dbt | Cobertura de cada camada, inclusive cenários de falha |
 | Orquestração | `Makefile` + GitHub Actions agendado (diário); Dagster como evolução opcional | Simples primeiro, escalável depois |
 
-**Modelagem dbt prevista** (conforme o [ADR 0001](adr/0001-chave-e-historico-das-solicitacoes.md)). `stg_siac156__solicitacoes`, com tipagem `DATE`, trim e padronização de caixa e acentos, **sem deduplicação**. O fato `fct_solicitacoes` é um retrato do último snapshot válido em full refresh, com `solicitacao_sk = hash(snapshot_data, nº da linha)`, única só dentro do snapshot. O modelo incremental `fct_snapshot_agregado` guarda as contagens por `snapshot_data × Tipo × Orgao × Assunto × Bairro × Origem × Situacao` e é o histórico do projeto. Completam a modelagem as dimensões `dim_orgao`, `dim_assunto`, `dim_bairro` (com Regional), `dim_origem` e `dim_data`, e os agregados `agg_diario` e `agg_tempo_resposta`. A mediana de dias até a resposta considera só as solicitações respondidas, o que causa viés nos meses recentes; os pendentes são exibidos à parte.
+**Modelagem dbt** (implementada na fase 5, conforme o [ADR 0001](adr/0001-chave-e-historico-das-solicitacoes.md)):
+
+```mermaid
+flowchart LR
+    B[(Bronze<br/>Parquet)] --> S[stg_siac156__solicitacoes<br/>view, todos os snapshots]
+    SO[seed orgaos] --> S
+    SR[seed regionais] --> S
+    S --> I[int_solicitacoes__ultimo_snapshot]
+    S --> D[dim_orgao · dim_assunto<br/>dim_localidade · dim_origem · dim_data]
+    S --> H[fct_snapshot_agregado<br/>incremental]
+    I --> F[fct_solicitacoes]
+    F --> A1[agg_diario]
+    F --> A2[agg_tempo_resposta]
+```
+
+- **Staging** (`stg_siac156__solicitacoes`, view): tipagem `DATE`, trim, nomes de exibição de órgão e regional por seed, bairro e regional ausentes como `NÃO INFORMADO` e `Não informada`, `respondida` e `dias_ate_resposta`, **sem deduplicação**. É o único modelo com `logradouro`.
+- **Fato atual** (`fct_solicitacoes`, tabela): o último snapshot, uma linha por solicitação, com `solicitacao_sk = md5(snapshot_data, linha)`, única só dentro do snapshot. Tem `dias_em_aberto` para pendentes e **não tem logradouro**.
+- **Histórico** (`fct_snapshot_agregado`, incremental `delete+insert` por `snapshot_data`): `quantidade` e `respondidas` por snapshot × órgão × assunto/subdivisão × localidade × origem × tipo × situação. São cerca de 68 mil linhas por snapshot. Recarregar um snapshot antigo exige `--full-refresh`.
+- **Dimensões:**
+  - `dim_orgao`, `dim_assunto` (grão assunto × subdivisão), `dim_origem` e `dim_data` (calendário em português).
+  - `dim_localidade` (grão **bairro × regional**): na fonte, 13 bairros aparecem em 2 ou 3 regionais, então a regional não pode ser atributo do bairro.
+- **Agregados:** `agg_diario` (criadas e respondidas por dia, com zero nos dias vazios) e `agg_tempo_resposta` por órgão. Neste último, a mediana e o p90 consideram só as respondidas, e `pendentes` e `mediana_dias_em_aberto` aparecem ao lado para expor o viés de censura.
 
 **Endpoints da API.** `/health`, `/ingestoes` (metadados e status de cada execução, lidos de `ingestao_execucoes`), `/solicitacoes` (filtros e paginação), `/indicadores/resumo`, `/indicadores/serie-temporal`, `/indicadores/por-orgao`, `/indicadores/por-bairro`, `/indicadores/tempo-resposta`, `/qualidade` (resultado dos testes da última carga).
 
@@ -132,7 +153,7 @@ A demanda pede que a camada de obtenção valide se o serviço foi executado cor
 | Validação da execução | Cada checagem falhando gera log, registro `falha` em `ingestao_execucoes` e exit code ≠ 0 | `pytest`, `caplog`, `typer.testing.CliRunner` |
 | Bronze | CSV → Parquet preserva linhas e tipos; reexecução não duplica | `pytest` + amostra em `tests/fixtures/` |
 | Contrato de entrada | CSV válido passa; coluna faltando, data inválida ou domínio fora da lista falham com mensagem clara | Pandera |
-| dbt | `dbt build` na amostra: `not_null` (Bairro com severidade *warn*), `unique` só em chaves de dimensão e em `solicitacao_sk`, `accepted_values`, `relationships`, `DataResposta >= DataCriacao`, contagem do fato = linhas do arquivo | `dbt-duckdb`, `dbt-expectations` |
+| dbt | `dbt build` real sobre uma Bronze sintética (2 ou 3 snapshots, com linhas idênticas), incremental e falha. Dentro do dbt: 42 testes de dados e 1 teste unitário do staging. Os testes de integridade (chaves, `relationships`, fato = Bronze, soma do agregado = Bronze por snapshot) falham o build; os de qualidade que o contrato já tolera (`accepted_values`, `DataResposta >= DataCriacao`) são `warn` | `dbt-duckdb`, testes nativos + `expression_is_true` próprio, pytest (`-m slow`) |
 | API | Status, schemas, filtros e paginação de cada endpoint | `TestClient` sobre DuckDB de teste |
 
 O CI roda tudo com uma amostra pequena do CSV versionada em `tests/fixtures/` e exige cobertura mínima de 80% (`pytest-cov`).
@@ -167,8 +188,8 @@ CwbDataSIAC/
 │   └── export/static_json.py  # gera JSON para o dashboard no Pages
 ├── dbt/siac156/
 │   ├── models/staging | intermediate | marts
-│   ├── tests/  macros/  seeds/   # seeds: de-para de bairros e nomes de exibição de órgãos
-│   └── dbt_project.yml
+│   ├── tests/  macros/  seeds/   # seeds: nomes de exibição de órgãos e regionais
+│   └── dbt_project.yml, profiles.yml   # caminho dos dados via CWBDATASIAC_DATA_DIR
 ├── dashboard/                 # index.html + js/ com Apache ECharts
 ├── reports/                   # relatório Quarto (.qmd) e saídas
 ├── notebooks/00_exploracao.ipynb
@@ -187,7 +208,7 @@ Oito fases curtas, cada uma terminando num commit que funciona sozinho. Assim o 
 2. **Esqueleto e CI.** `uv`, `ruff`, `pytest` + `pytest-cov`, pre-commit, configuração de logging, Makefile, workflow de CI, README inicial. *Pronto quando:* CI verde num repositório vazio de lógica. **✅ Concluída em 21/10/2026:** CLI `cwbdatasiac` (typer), logging JSON com `run_id` em `observability/logging.py`, ruff, pytest com cobertura mínima de 80%, pre-commit, `Makefile` e `.github/workflows/ci.yml`.
 3. **Ingestão, validação da execução e Bronze.** Descoberta pelo manifesto, download com retry e checksum, checagens pós-captura, tabela `ingestao_execucoes`, conversão para Parquet, módulo Playwright opcional como estratégia alternativa. Carga histórica opcional pelo espelho C3SL. *Pronto quando:* `make ingest` é idempotente (rodar duas vezes não duplica) e uma falha simulada (HTTP 500, arquivo truncado, coluna faltando) gera log, registro `falha` e exit code ≠ 0. **✅ Concluída em 21/10/2026:** `cwbdatasiac ingest` / `make ingest`, validado contra a fonte real (cerca de 13 s por carga) e com 50 testes (99% de cobertura). A carga histórica foi adiada: os arquivos antigos têm outro layout e serão tratados depois do dbt.
 4. **Contrato e validação de entrada.** Schema Pandera (colunas, tipos, datas válidas, domínios de Situação e Origem); carga rejeitada vai para quarentena com relatório. *Pronto quando:* um CSV com coluna faltando falha com mensagem clara. **✅ Concluída em 22/10/2026:** contrato com severidade bloqueante ou de alerta e tolerância percentual; a coluna faltando já é barrada pela checagem de cabeçalho da fase 3. O snapshot real de 21/10 (629.180 linhas) passou com 0 violações, e a validação leva cerca de 0,6 s. São 69 testes, com 99% de cobertura.
-5. **dbt.** Staging, dimensões, fato do último snapshot, histórico agregado incremental e agregados; testes `not_null`, `unique`, `accepted_values`, `relationships` e regras como `DataResposta >= DataCriacao`; `dbt docs`. *Pronto quando:* `dbt build` verde e linhagem publicada.
+5. **dbt.** Staging, dimensões, fato do último snapshot, histórico agregado incremental e agregados; testes `not_null`, `unique`, `accepted_values`, `relationships` e regras como `DataResposta >= DataCriacao`; `dbt docs`. *Pronto quando:* `dbt build` verde e linhagem publicada. **✅ Concluída em 22/10/2026:** `cwbdatasiac transform` / `make transform` rodou com 56 de 56 nós verdes sobre os snapshots reais de 20 e 21/10 (cerca de 7 s), e `make docs` gera a linhagem em `dbt/siac156/target/static_index.html`. A publicação dessa página no GitHub Pages fica para a fase 8, junto com o dashboard. São 78 testes pytest, com 99% de cobertura.
 6. **FastAPI.** Conexão somente leitura ao DuckDB, modelos Pydantic, filtros, paginação, testes com `TestClient`. *Pronto quando:* `/docs` mostra todos os endpoints e os testes passam.
 7. **Dashboard ECharts e relatório.** Painel consumindo a API localmente e JSON estático no GitHub Pages; relatório Quarto com 5 a 8 achados (assuntos mais demandados, bairros, tempo de resposta por órgão, sazonalidade). *Pronto quando:* link público do dashboard funcionando.
 8. **Automação e vitrine.** Workflow diário atualizando o Pages e notificando falhas, badges (CI, cobertura), diagrama de arquitetura, GIF do dashboard, seção "decisões técnicas" e "próximos passos" (Dagster, Postgres, Great Expectations). *Pronto quando:* o README conta a história em 2 minutos de leitura.

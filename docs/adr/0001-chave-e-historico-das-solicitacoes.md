@@ -25,7 +25,7 @@ As linhas idênticas são solicitações reais e distintas que ficam indistingu�
 
 1. **Não deduplicar.** Cada linha do arquivo conta como uma solicitação.
 2. **A camada Gold de solicitações é um retrato do último snapshot válido**, carregado em full refresh. A chave técnica `solicitacao_sk = hash(snapshot_data, número da linha no arquivo)` é única **apenas dentro do snapshot**, e isso fica documentado como tal.
-3. **O histórico é guardado de forma agregada.** A cada carga, grava-se `fct_snapshot_agregado` com as contagens por `snapshot_data × Tipo × Orgao × Assunto × Bairro × Origem × Situacao` (incremental, append por `snapshot_data`). É isso que permite séries como "quantas solicitações abertas havia em cada dia" e o fluxo entre situações no nível agregado.
+3. **O histórico é guardado de forma agregada.** A cada carga, grava-se `fct_snapshot_agregado` com as contagens por `snapshot_data × Tipo × Orgao × Assunto × Bairro × Origem × Situacao` (incremental, append por `snapshot_data`). *Nota da fase 5:* na implementação, o grão inclui também a subdivisão do assunto e a regional, para usar as mesmas dimensões do fato (`dim_assunto`, `dim_localidade`). São cerca de 68 mil linhas por snapshot. É isso que permite séries como "quantas solicitações abertas havia em cada dia" e o fluxo entre situações no nível agregado.
 4. **Os arquivos brutos de todos os snapshots são preservados no Bronze** (Parquet), o que permite reprocessar caso a decisão mude.
 5. O snapshot dbt `snp_solicitacoes_status` (SCD2 por solicitação) **sai do escopo**.
 

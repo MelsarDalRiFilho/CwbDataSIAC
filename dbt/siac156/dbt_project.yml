@@ -1,0 +1,27 @@
+name: siac156
+version: "0.1.0"
+config-version: 2
+profile: siac156
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+
+clean-targets: ["target", "logs"]
+
+models:
+  siac156:
+    staging:
+      +schema: staging
+      +materialized: view
+    intermediate:
+      +schema: intermediate
+      +materialized: view
+    marts:
+      +schema: marts
+      +materialized: table
+
+seeds:
+  siac156:
+    +schema: seeds

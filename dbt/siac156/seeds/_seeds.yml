@@ -1,0 +1,18 @@
+version: 2
+
+seeds:
+  - name: orgaos
+    description: Nome de exibição de cada órgão, corrigindo a caixa dos nomes que vêm em maiúsculas.
+    config:
+      column_types: {orgao_origem: varchar, orgao_nome: varchar}
+    columns:
+      - name: orgao_origem
+        data_tests: [unique, not_null]
+
+  - name: regionais
+    description: Nome de exibição de cada regional, sem o prefixo e com acentos.
+    config:
+      column_types: {regional_origem: varchar, regional_nome: varchar}
+    columns:
+      - name: regional_origem
+        data_tests: [unique, not_null]

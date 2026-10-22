@@ -1,0 +1,14 @@
+version: 2
+
+sources:
+  - name: bronze
+    description: Camada Bronze gravada pela ingestão (`cwbdatasiac ingest`), um Parquet por snapshot.
+    tables:
+      - name: solicitacoes
+        description: >
+          Todas as linhas de todos os snapshots diários do SIAC 156, como texto, mais
+          `snapshot_data` e `linha` (posição no arquivo). Ver ADR 0001.
+        meta:
+          external_location: >-
+            read_parquet('{{ env_var('CWBDATASIAC_DATA_DIR', 'data') }}/bronze/siac156/*/*.parquet',
+            hive_partitioning = false)

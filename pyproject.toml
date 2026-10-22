@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 authors = [{ name = "Melsar José Dal Ri Filho", email = "melsar.filho@gmail.com" }]
 dependencies = [
+    "dbt-duckdb>=1.11.0",
     "duckdb>=2.0.0",
     "httpx>=0.28.1",
     "pandas>=3.0.6",
@@ -60,6 +61,7 @@ select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["slow: roda o dbt de verdade (alguns segundos); pule com -m 'not slow'"]
 addopts = "--cov=cwbdatasiac --cov-report=term-missing"
 
 [tool.coverage.run]

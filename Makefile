@@ -1,4 +1,4 @@
-.PHONY: install install-browser lint format test check ingest explore
+.PHONY: install install-browser lint format test check ingest transform docs pipeline explore
 
 install:  ## instala dependências e os hooks de pre-commit
 	uv sync
@@ -23,6 +23,14 @@ check: lint test  ## o mesmo que o CI roda
 
 ingest:  ## baixa o snapshot mais recente, valida e grava no Bronze (idempotente)
 	uv run cwbdatasiac ingest
+
+transform:  ## dbt build: seeds, modelos e testes sobre a Bronze
+	uv run cwbdatasiac transform
+
+docs:  ## documentação e linhagem do dbt em dbt/siac156/target/static_index.html
+	uv run cwbdatasiac docs
+
+pipeline: ingest transform  ## ingestão seguida do dbt
 
 explore:  ## reexecuta o notebook de exploração (precisa de data/raw/)
 	uv run --group explore jupyter nbconvert --to notebook --execute --inplace notebooks/00_exploracao.ipynb

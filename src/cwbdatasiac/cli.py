@@ -11,6 +11,7 @@ from cwbdatasiac import __version__
 from cwbdatasiac.config import IngestSettings
 from cwbdatasiac.ingestion.pipeline import run_ingestion
 from cwbdatasiac.observability import configure_logging
+from cwbdatasiac.transform import run_dbt
 
 app = typer.Typer(help="Pipeline de dados abertos do SIAC 156 de Curitiba.", no_args_is_help=True)
 
@@ -71,4 +72,25 @@ def ingest(
     typer.echo(f"{execucao.status}: {execucao.arquivo or '-'} ({execucao.run_id})")
     if execucao.status == "falha":
         typer.echo(f"etapa {execucao.etapa_falha}: {execucao.mensagem}", err=True)
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def transform(
+    data_dir: Annotated[Path, typer.Option(help="Diretório de dados.")] = Path("data"),
+    full_refresh: Annotated[
+        bool, typer.Option(help="Reconstrói o histórico agregado do zero.")
+    ] = False,
+) -> None:
+    """Roda `dbt build` (seeds, modelos e testes) sobre a camada Bronze."""
+    if not run_dbt(["build", *(["--full-refresh"] if full_refresh else [])], data_dir):
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def docs(
+    data_dir: Annotated[Path, typer.Option(help="Diretório de dados.")] = Path("data"),
+) -> None:
+    """Gera a documentação e a linhagem do dbt (dbt/siac156/target/static_index.html)."""
+    if not run_dbt(["docs", "generate", "--static"], data_dir):
         raise typer.Exit(code=1)

@@ -1,0 +1,52 @@
+version: 2
+
+models:
+  - name: stg_siac156__solicitacoes
+    description: >
+      Uma linha por linha da Bronze (todos os snapshots), com tipos e nomes padronizados.
+      Linhas idênticas são solicitações distintas e não são deduplicadas (ADR 0001).
+      Contém `logradouro`, que é dado pessoal indireto: não expor fora do warehouse.
+      Os testes de dados ficam nos marts, que leem só o último snapshot; testar esta view
+      percorreria todo o histórico a cada build.
+    columns:
+      - name: solicitacao_sk
+        description: Chave técnica, única só dentro do snapshot (hash de snapshot_data + linha).
+      - name: orgao
+        description: Nome de exibição do órgão (seed `orgaos`), ou o nome original se ausente do seed.
+      - name: bairro
+        description: Bairro em maiúsculas; nulo vira `NÃO INFORMADO`.
+      - name: regional
+        description: Nome da regional sem o prefixo "Unidade Regional" (seed `regionais`).
+      - name: dias_ate_resposta
+        description: Dias corridos entre criação e resposta; nulo se ainda não respondida.
+
+unit_tests:
+  - name: padroniza_nomes_datas_e_ausentes
+    description: Corrige a caixa do órgão, o nome da regional, tipa datas e preenche bairro ausente.
+    model: stg_siac156__solicitacoes
+    given:
+      # A fonte é um Parquet externo, sem relação no banco para o dbt ler as colunas:
+      # por isso a entrada vem em SQL, com os tipos explícitos.
+      - input: source('bronze', 'solicitacoes')
+        format: sql
+        rows: |
+          select
+              date '2026-10-20' as snapshot_data, 1 as linha, 'Solicitação' as Tipo,
+              'SECRETARIA MUNICIPAL DA SAÚDE' as Orgao, '01/10/2026' as DataCriacao,
+              ' Coleta ' as Assunto, 'Entulho' as Subdivisao, 'Concluído' as Situacao,
+              'Rua X' as Logradouro, 'Xaxim' as Bairro, 'Unidade Regional Boqueirao' as Regional,
+              '11/10/2026' as DataResposta, 'App 156' as Origem
+          union all
+          select
+              date '2026-10-20', 2, 'Elogio', 'Órgão Novo', '05/10/2026', 'Outro', 'Outro',
+              'Aberto', null, null, null, null, 'Portal'
+      - input: ref('orgaos')
+        rows:
+          - {orgao_origem: "SECRETARIA MUNICIPAL DA SAÚDE", orgao_nome: "Secretaria Municipal da Saúde"}
+      - input: ref('regionais')
+        rows:
+          - {regional_origem: "Unidade Regional Boqueirao", regional_nome: "Boqueirão"}
+    expect:
+      rows:
+        - {linha: 1, orgao: "Secretaria Municipal da Saúde", assunto: "Coleta", bairro: "XAXIM", regional: "Boqueirão", data_criacao: 2026-10-01, respondida: true, dias_ate_resposta: 10}
+        - {linha: 2, orgao: "Órgão Novo", assunto: "Outro", bairro: "NÃO INFORMADO", regional: "Não informada", data_criacao: 2026-10-05, respondida: false, dias_ate_resposta: null}

@@ -1,0 +1,8 @@
+# CWBDATASIAC_DATA_DIR aponta para o diretório de dados (o CLI define o caminho absoluto).
+siac156:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: "{{ env_var('CWBDATASIAC_DATA_DIR', 'data') }}/warehouse.duckdb"
+      threads: 4

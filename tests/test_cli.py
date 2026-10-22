@@ -67,3 +67,22 @@ def test_ingest_failure_exits_nonzero(tmp_path, fake_ingestion):
 
     assert result.exit_code == 1
     assert "etapa download: HTTP 500" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("args", "expected_command"),
+    [
+        (["transform"], ["build"]),
+        (["transform", "--full-refresh"], ["build", "--full-refresh"]),
+        (["docs"], ["docs", "generate", "--static"]),
+    ],
+)
+@pytest.mark.parametrize("success", [True, False])
+def test_dbt_commands(tmp_path, monkeypatch, args, expected_command, success):
+    calls = []
+    monkeypatch.setattr(cli, "run_dbt", lambda cmd, data_dir: calls.append(cmd) or success)
+
+    result = runner.invoke(app, ["--log-dir", str(tmp_path), *args])
+
+    assert calls == [expected_command]
+    assert result.exit_code == (0 if success else 1)

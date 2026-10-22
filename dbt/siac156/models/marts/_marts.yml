@@ -1,0 +1,153 @@
+version: 2
+
+# Severidade: integridade do modelo (chaves, relacionamentos, contagens) é `error`;
+# regras de qualidade que o contrato de entrada já tolera até 0,1% são `warn`.
+
+models:
+  - name: dim_orgao
+    description: Órgãos responsáveis pelo atendimento, com nome de exibição padronizado.
+    columns:
+      - name: orgao_sk
+        data_tests: [unique, not_null]
+      - name: orgao
+        data_tests: [unique, not_null]
+
+  - name: dim_assunto
+    description: Assunto e subdivisão do serviço solicitado (grão assunto × subdivisão).
+    columns:
+      - name: assunto_sk
+        data_tests: [unique, not_null]
+      - name: assunto
+        data_tests: [not_null]
+      - name: subdivisao
+        data_tests: [not_null]
+
+  - name: dim_localidade
+    description: >
+      Par bairro × regional. Na fonte, um mesmo bairro pode aparecer em mais de uma
+      regional; bairro ausente vira `NÃO INFORMADO` e regional ausente, `Não informada`.
+    columns:
+      - name: localidade_sk
+        data_tests: [unique, not_null]
+      - name: regional
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [Bairro Novo, Boa Vista, Boqueirão, Cajuru, CIC, Matriz, Pinheirinho, Portão, Santa Felicidade, Tatuquara, Não informada]
+              config:
+                severity: warn
+
+  - name: dim_origem
+    description: Canal de entrada da solicitação.
+    columns:
+      - name: origem_sk
+        data_tests: [unique, not_null]
+
+  - name: dim_data
+    description: Calendário diário do início do ano mais antigo até o snapshot mais recente.
+    columns:
+      - name: data
+        data_tests: [unique, not_null]
+
+  - name: fct_solicitacoes
+    description: >
+      Retrato do último snapshot: uma linha por solicitação, sem deduplicar (ADR 0001) e
+      sem logradouro (LGPD). `solicitacao_sk` só é estável dentro do snapshot.
+    data_tests:
+      - expression_is_true:
+          arguments:
+            expression: "data_resposta is null or data_resposta >= data_criacao"
+          config:
+            severity: warn
+      - expression_is_true:
+          arguments:
+            expression: "respondida = (data_resposta is not null)"
+    columns:
+      - name: solicitacao_sk
+        data_tests: [unique, not_null]
+      - name: data_criacao
+        data_tests:
+          - not_null:
+              config:
+                severity: warn
+          - relationships:
+              arguments:
+                to: ref('dim_data')
+                field: data
+              config:
+                severity: warn
+      - name: orgao_sk
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_orgao')
+                field: orgao_sk
+      - name: assunto_sk
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_assunto')
+                field: assunto_sk
+      - name: localidade_sk
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_localidade')
+                field: localidade_sk
+      - name: origem_sk
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_origem')
+                field: origem_sk
+      - name: situacao
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [Concluído, Aberto, Em andamento, Respondido, Em avaliação, Falta de dados]
+              config:
+                severity: warn
+      - name: tipo
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [Solicitação, Reclamação, Denúncia, Elogio, Sugestão, Recadastro, Informação]
+              config:
+                severity: warn
+
+  - name: fct_snapshot_agregado
+    description: >
+      Histórico agregado (ADR 0001): quantidade de solicitações e de respondidas por
+      snapshot × órgão × assunto × localidade × origem × tipo × situação. Incremental.
+    data_tests:
+      - expression_is_true:
+          arguments:
+            expression: "quantidade > 0 and respondidas between 0 and quantidade"
+    columns:
+      - name: snapshot_data
+        data_tests: [not_null]
+      - name: orgao_sk
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_orgao')
+                field: orgao_sk
+
+  - name: agg_diario
+    description: Solicitações criadas e respondidas por dia no último snapshot.
+    columns:
+      - name: data
+        data_tests: [unique, not_null]
+
+  - name: agg_tempo_resposta
+    description: >
+      Tempo de resposta por órgão no último snapshot. A mediana considera só as respondidas;
+      `pendentes` e `mediana_dias_em_aberto` mostram o outro lado (viés de censura).
+    columns:
+      - name: orgao_sk
+        data_tests: [unique, not_null]
+      - name: taxa_resposta
+        data_tests:
+          - expression_is_true:
+              arguments:
+                expression: "taxa_resposta between 0 and 1"
