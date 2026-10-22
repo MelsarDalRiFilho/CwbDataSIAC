@@ -3,6 +3,9 @@
 from dataclasses import dataclass
 from pathlib import Path
 
+# Raiz do repositório: o projeto dbt e o dashboard vivem fora do pacote Python.
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
 DATASET_KEY = "0d5a7b06-3940-4be9-876e-bc8f23e96530"
 DATASET_EXTENSION_KEY = "377f4e23-0e4f-4f11-954f-ae06ba689558"
 

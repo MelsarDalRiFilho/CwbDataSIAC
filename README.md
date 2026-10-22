@@ -7,6 +7,10 @@ Pipeline de engenharia de dados sobre os dados abertos da Prefeitura de Curitiba
 captura da fonte, validação, armazenamento, modelagem com dbt, API em FastAPI e dashboard em
 Apache ECharts.
 
+**[Painel ao vivo](https://melsardalrifilho.github.io/CwbDataSIAC/)** ·
+[Relatório](https://melsardalrifilho.github.io/CwbDataSIAC/relatorio/) ·
+[Linhagem dos dados (dbt)](https://melsardalrifilho.github.io/CwbDataSIAC/dbt/)
+
 > 🚧 Em construção. Veja o [plano por fases](docs/data_siac_plano.md) e o andamento abaixo.
 
 ## A fonte
@@ -42,7 +46,9 @@ make ingest    # baixa o snapshot mais recente, valida e grava no Bronze
 make transform # dbt build: modelos e testes sobre a Bronze
 make docs      # documentação e linhagem do dbt (dbt/siac156/target/static_index.html)
 make pipeline  # ingest + transform
-make api       # API em http://127.0.0.1:8000 (documentação em /docs)
+make api       # API em http://127.0.0.1:8000 (painel em /painel, documentação em /docs)
+make report    # relatório em reports/relatorio.html
+make site      # site estático em site/ (o que vai para o GitHub Pages)
 uv run cwbdatasiac --help
 ```
 
@@ -99,6 +105,23 @@ A API abre o DuckDB só para leitura e por poucos milissegundos a cada requisiç
 pipeline grava, ela responde `503` com `Retry-After`; do outro lado, a ingestão e o dbt esperam o
 lock em vez de falhar.
 
+### Painel e relatório
+
+- **Painel (`dashboard/`):** HTML e JavaScript estáticos com Apache ECharts. Mostra KPIs, a série de
+  criadas e respondidas, o mapa por bairro, os assuntos mais frequentes, o treemap órgão → assunto,
+  o tempo de resposta por órgão, o mapa de calor de mês × dia da semana e a situação em cada
+  snapshot. Funciona servido pela API (`/painel`) ou como site estático (lê `data/*.json`).
+  - A paleta foi validada para daltonismo nos modos claro e escuro.
+  - Todo gráfico tem uma visão em tabela.
+- **Relatório:** `cwbdatasiac report` gera um HTML com 7 achados cujos números são recalculados a
+  cada execução (canais, concentração da demanda, tempo de resposta e viés de censura, gargalos,
+  bairros, sazonalidade e limitações dos dados).
+- **Publicação:** o workflow **Pages** (acionado manualmente em *Actions*) roda o pipeline completo
+  e publica painel, relatório e linhagem do dbt. Vão para a web só dados agregados.
+
+Divisa de bairros: [IPPUC](https://ippuc.org.br/geodownloads/geo.htm), convertida para GeoJSON por
+`scripts/build_bairros_geojson.py`.
+
 Para reexecutar a exploração, baixe os arquivos para `data/raw/` (instruções no início do notebook) e rode `make explore`.
 
 ## Andamento
@@ -111,7 +134,7 @@ Para reexecutar a exploração, baixe os arquivos para `data/raw/` (instruções
 | 4. Contrato e validação de entrada | ✅ |
 | 5. dbt | ✅ |
 | 6. FastAPI | ✅ |
-| 7. Dashboard ECharts e relatório | ⏳ |
+| 7. Dashboard ECharts e relatório | ✅ |
 | 8. Automação e vitrine | ⏳ |
 
 ## Estrutura
@@ -119,8 +142,10 @@ Para reexecutar a exploração, baixe os arquivos para `data/raw/` (instruções
 ```
 src/cwbdatasiac/      código do pipeline (CLI, ingestão, contrato, dbt runner, API, logging)
 dbt/siac156/          projeto dbt (staging, marts, seeds, testes)
+dashboard/            painel ECharts (estático) e GeoJSON dos bairros
+scripts/              conversão da divisa de bairros do IPPUC
 tests/                testes pytest (inclui dbt build sobre Bronze sintética)
 notebooks/            exploração da fonte
 docs/                 demanda, plano e decisões (ADRs)
-data/, logs/          gerados localmente, fora do git
+data/, logs/, site/   gerados localmente, fora do git
 ```

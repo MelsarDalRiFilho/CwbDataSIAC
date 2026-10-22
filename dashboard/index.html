@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SIAC 156 Curitiba — painel</title>
+<meta name="description" content="Indicadores do Sistema Integrado de Atendimento ao Cidadão (156) de Curitiba, a partir dos dados abertos da Prefeitura.">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<main class="viz-root">
+  <header class="topo">
+    <div>
+      <h1>Atendimento ao cidadão em Curitiba · SIAC 156</h1>
+      <p id="subtitulo" class="secundario">Carregando…</p>
+    </div>
+    <nav class="links">
+      <a href="relatorio/" id="link-relatorio">Relatório</a>
+      <a href="dbt/" id="link-dbt">Linhagem dos dados</a>
+      <a href="https://github.com/MelsarDalRiFilho/CwbDataSIAC">Código</a>
+    </nav>
+  </header>
+
+  <p id="aviso" class="aviso" hidden></p>
+
+  <section class="kpis" id="kpis" aria-label="Indicadores principais"></section>
+
+  <div class="filtros" role="group" aria-label="Granularidade da série temporal">
+    <span class="secundario">Série temporal:</span>
+    <button type="button" data-granularidade="dia" aria-pressed="false">Dia</button>
+    <button type="button" data-granularidade="semana" aria-pressed="true">Semana</button>
+    <button type="button" data-granularidade="mes" aria-pressed="false">Mês</button>
+  </div>
+
+  <div class="grade">
+    <article class="cartao largo" data-painel="serie">
+      <h2>Solicitações criadas e respondidas</h2>
+      <p class="secundario">Respondidas contam na data da resposta. O último período está incompleto.</p>
+      <div class="grafico" id="g-serie"></div>
+    </article>
+
+    <article class="cartao" data-painel="mapa">
+      <h2>Solicitações por bairro</h2>
+      <p class="secundario">Divisa de bairros: IPPUC.</p>
+      <div class="grafico alto" id="g-mapa"></div>
+    </article>
+
+    <article class="cartao" data-painel="assuntos">
+      <h2>15 assuntos mais frequentes</h2>
+      <p class="secundario">Assunto e órgão responsável.</p>
+      <div class="grafico alto" id="g-assuntos"></div>
+    </article>
+
+    <article class="cartao largo" data-painel="treemap">
+      <h2>Órgãos e assuntos</h2>
+      <p class="secundario">Área proporcional ao número de solicitações; clique para aproximar.</p>
+      <div class="grafico alto" id="g-treemap"></div>
+    </article>
+
+    <article class="cartao" data-painel="tempo">
+      <h2>Dias até a resposta, por órgão</h2>
+      <p class="secundario">Órgãos com ao menos 1.000 solicitações. Só conta quem já foi respondido.</p>
+      <div class="grafico alto" id="g-tempo"></div>
+    </article>
+
+    <article class="cartao" data-painel="calor">
+      <h2>Mês × dia da semana</h2>
+      <p class="secundario">Solicitações criadas (a base não registra a hora).</p>
+      <div class="grafico" id="g-calor"></div>
+    </article>
+
+    <article class="cartao largo" data-painel="historico">
+      <h2>Situação das solicitações em cada snapshot</h2>
+      <p class="secundario">Histórico agregado: um ponto por arquivo diário carregado.</p>
+      <div class="grafico" id="g-historico"></div>
+    </article>
+  </div>
+
+  <footer class="secundario">
+    Fonte: Prefeitura Municipal de Curitiba — dados abertos do SIAC 156 (CC BY 4.0).
+    Endereços não são publicados; o menor recorte geográfico é o bairro.
+    <span id="qualidade"></span>
+  </footer>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/echarts@6.1.0/dist/echarts.min.js"></script>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

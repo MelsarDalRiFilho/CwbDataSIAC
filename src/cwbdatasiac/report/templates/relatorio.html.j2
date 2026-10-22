@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SIAC 156 Curitiba — relatório ({{ snapshot }})</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7; --surface-1: #fcfcfb; --text-primary: #0b0b0b; --text-secondary: #52514e;
+    --text-muted: #898781; --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
+    --series-1: #2a78d6; --series-2: #eb6834;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --page: #0d0d0d; --surface-1: #1a1a19; --text-primary: #f0efec; --text-secondary: #c3c2b7;
+      --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+      --series-1: #3987e5; --series-2: #d95926;
+    }
+  }
+  body { margin: 0; background: var(--page); color: var(--text-primary);
+         font: 16px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 32px 20px 64px; }
+  header p, footer { color: var(--text-secondary); }
+  h1 { font-size: 1.8rem; margin-bottom: 4px; }
+  h2 { font-size: 1.2rem; margin: 0 0 8px; }
+  section { background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
+            padding: 20px 24px; margin: 20px 0; }
+  .chart { height: 340px; margin-top: 12px; }
+  table { border-collapse: collapse; width: 100%; margin-top: 12px; font-size: 0.9rem; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--grid); }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  th { color: var(--text-secondary); font-weight: 600; }
+  details { margin-top: 8px; color: var(--text-secondary); }
+  summary { cursor: pointer; }
+  a { color: var(--series-1); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Atendimento ao cidadão em Curitiba (SIAC 156)</h1>
+    <p>Relatório gerado a partir do snapshot de {{ snapshot }} ·
+       <a href="../">dashboard</a> · <a href="../dbt/">linhagem dos dados</a></p>
+  </header>
+
+  {% for achado in achados %}
+  <section>
+    <h2>{{ loop.index }}. {{ achado.titulo }}</h2>
+    <p>{{ achado.texto }}</p>
+    {% if achado.grafico %}
+    <div class="chart" id="chart-{{ achado.grafico }}" role="img"
+         aria-label="Gráfico: {{ achado.titulo }}"></div>
+    <details><summary>Ver tabela</summary><div id="table-{{ achado.grafico }}"></div></details>
+    {% endif %}
+    {% if achado.tabela %}
+    <table>
+      {%- set numericas = achado.colunas_numericas() %}
+      <thead><tr>{% for col in achado.tabela[0] %}<th{% if numericas[loop.index0] %} class="num"{% endif %}>{{ col }}</th>{% endfor %}</tr></thead>
+      <tbody>
+      {% for linha in achado.tabela %}
+        <tr>{% for valor in linha.values() %}<td{% if numericas[loop.index0] %} class="num"{% endif %}>{{ valor }}</td>{% endfor %}</tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </section>
+  {% endfor %}
+
+  <footer>
+    <p>Fonte: Prefeitura Municipal de Curitiba, dados abertos do SIAC 156 (CC BY 4.0).
+       Projeto <a href="https://github.com/MelsarDalRiFilho/CwbDataSIAC">CwbDataSIAC</a> v{{ versao }}.</p>
+  </footer>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/echarts@6.1.0/dist/echarts.min.js"></script>
+<script>
+const CHARTS = {{ charts_json | safe }};
+const fmt = new Intl.NumberFormat("pt-BR");
+const mesAno = (iso) => new Intl.DateTimeFormat("pt-BR", { month: "short", timeZone: "UTC" })
+  .format(new Date(iso)).replace(".", "");
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+function table(id, columns, rows) {
+  const head = columns.map(([label, , num]) => `<th${num ? ' class="num"' : ""}>${label}</th>`).join("");
+  const body = rows.map((r) => "<tr>" + columns.map(([, key, num]) =>
+    `<td${num ? ' class="num"' : ""}>${num ? fmt.format(r[key] ?? 0) : r[key]}</td>`).join("") + "</tr>").join("");
+  document.getElementById(id).innerHTML = `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+}
+
+function base() {
+  const muted = css("--text-muted"), grid = css("--grid"), axis = css("--axis");
+  return {
+    textStyle: { fontFamily: "system-ui, -apple-system, 'Segoe UI', sans-serif", color: css("--text-secondary") },
+    grid: { left: 8, right: 24, top: 40, bottom: 8, containLabel: true },
+    legend: { top: 0, left: 0, textStyle: { color: css("--text-secondary") }, icon: "roundRect" },
+    tooltip: { backgroundColor: css("--surface-1"), borderColor: grid, textStyle: { color: css("--text-primary") },
+               valueFormatter: (v) => fmt.format(v) },
+    axisCommon: { axisLine: { lineStyle: { color: axis } }, axisTick: { show: false },
+                  axisLabel: { color: muted }, splitLine: { lineStyle: { color: grid } } },
+    valueLabel: { color: muted, formatter: (v) => fmt.format(v) },
+  };
+}
+
+function render() {
+  const b = base(), s1 = css("--series-1"), s2 = css("--series-2"), surface = css("--surface-1");
+  const ax = b.axisCommon;
+  const charts = [];
+
+  const mes = CHARTS.serie_mes;
+  const serieMes = echarts.init(document.getElementById("chart-serie_mes"));
+  serieMes.setOption({
+    ...b, tooltip: { ...b.tooltip, trigger: "axis" },
+    xAxis: { ...ax, type: "category", data: mes.map((p) => mesAno(p.periodo)), splitLine: { show: false } },
+    yAxis: { ...ax, type: "value", axisLabel: b.valueLabel },
+    series: [
+      { name: "Criadas", type: "line", data: mes.map((p) => p.criadas), color: s1, lineStyle: { width: 2 },
+        symbolSize: 8, endLabel: { show: true, color: css("--text-secondary"), formatter: "Criadas" },
+        labelLayout: { moveOverlap: "shiftY" } },
+      { name: "Respondidas", type: "line", data: mes.map((p) => p.respondidas), color: s2, lineStyle: { width: 2 },
+        symbolSize: 8, endLabel: { show: true, color: css("--text-secondary"), formatter: "Respondidas" },
+        labelLayout: { moveOverlap: "shiftY" } },
+    ],
+    grid: { ...b.grid, right: 96 },
+  });
+  table("table-serie_mes", [["Mês", "periodo"], ["Criadas", "criadas", true], ["Respondidas", "respondidas", true]], mes);
+  charts.push(serieMes);
+
+  const tr = [...CHARTS.tempo_resposta].reverse();
+  const tempo = echarts.init(document.getElementById("chart-tempo_resposta"));
+  tempo.setOption({
+    ...b, tooltip: { ...b.tooltip, trigger: "axis", axisPointer: { type: "shadow" },
+                     valueFormatter: (v) => `${fmt.format(v)} dias` },
+    xAxis: { ...ax, type: "value", axisLabel: b.valueLabel },
+    yAxis: { ...ax, type: "category", data: tr.map((o) => o.orgao), splitLine: { show: false },
+             axisLabel: { color: css("--text-muted"), width: 220, overflow: "truncate" } },
+    series: [
+      { name: "Mediana", type: "bar", data: tr.map((o) => o.mediana_dias_resposta), color: s1,
+        barGap: "0%", itemStyle: { borderRadius: [0, 4, 4, 0], borderColor: surface, borderWidth: 1 } },
+      { name: "p90", type: "bar", data: tr.map((o) => o.p90_dias_resposta), color: s2,
+        itemStyle: { borderRadius: [0, 4, 4, 0], borderColor: surface, borderWidth: 1 } },
+    ],
+  });
+  table("table-tempo_resposta", [["Órgão", "orgao"], ["Mediana (dias)", "mediana_dias_resposta", true],
+    ["p90 (dias)", "p90_dias_resposta", true], ["Pendentes", "pendentes", true]], CHARTS.tempo_resposta);
+  charts.push(tempo);
+
+  const bairros = [...CHARTS.bairros].reverse();
+  const bar = echarts.init(document.getElementById("chart-bairros"));
+  bar.setOption({
+    ...b, legend: { show: false }, tooltip: { ...b.tooltip, trigger: "item" },
+    xAxis: { ...ax, type: "value", axisLabel: b.valueLabel },
+    yAxis: { ...ax, type: "category", data: bairros.map((x) => x.bairro), splitLine: { show: false } },
+    series: [{ name: "Solicitações", type: "bar", data: bairros.map((x) => x.solicitacoes), color: s1,
+               itemStyle: { borderRadius: [0, 4, 4, 0] }, barCategoryGap: "30%",
+               label: { show: true, position: "right", color: css("--text-secondary"), formatter: (p) => fmt.format(p.value) } }],
+    grid: { ...b.grid, right: 64 },
+  });
+  table("table-bairros", [["Bairro", "bairro"], ["Solicitações", "solicitacoes", true], ["Pendentes", "pendentes", true]], CHARTS.bairros);
+  charts.push(bar);
+
+  return charts;
+}
+
+let charts = render();
+window.addEventListener("resize", () => charts.forEach((c) => c.resize()));
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+  charts.forEach((c) => c.dispose());
+  charts = render();
+});
+</script>
+</body>
+</html>

@@ -28,6 +28,7 @@ def test_openapi_lists_every_endpoint(client):
         "/indicadores/serie-temporal",
         "/indicadores/por-orgao",
         "/indicadores/por-assunto",
+        "/indicadores/por-origem",
         "/indicadores/por-bairro",
         "/indicadores/tempo-resposta",
         "/indicadores/historico-situacao",
@@ -140,6 +141,13 @@ def test_por_orgao_assunto_bairro(client):
     ]
     assert _get(client, "/indicadores/por-bairro", regional="Matriz") == [
         {"bairro": "CENTRO", "solicitacoes": 1, "pendentes": 0}
+    ]
+
+
+def test_por_origem(client):
+    assert _get(client, "/indicadores/por-origem") == [
+        {"origem": "App 156", "solicitacoes": 3},
+        {"origem": "Telefone", "solicitacoes": 2},
     ]
 
 

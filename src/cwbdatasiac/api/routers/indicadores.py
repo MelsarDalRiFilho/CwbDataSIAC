@@ -13,6 +13,7 @@ from cwbdatasiac.api.schemas import (
     PorAssunto,
     PorBairro,
     PorOrgao,
+    PorOrigem,
     Resumo,
     SituacaoNoSnapshot,
     TempoResposta,
@@ -68,6 +69,16 @@ def por_orgao(warehouse: WarehouseDep, limite: Limite = 50) -> list[dict]:
             {SOLICITACOES_FROM}
             group by 1 order by solicitacoes desc, o.orgao limit ?""",
         [limite],
+    )
+
+
+@router.get("/por-origem", response_model=list[PorOrigem])
+def por_origem(warehouse: WarehouseDep) -> list[dict]:
+    """Canal de entrada das solicitações."""
+    return warehouse.query(
+        f"""select g.origem, count(*) as solicitacoes
+            {SOLICITACOES_FROM}
+            group by 1 order by solicitacoes desc, g.origem"""
     )
 
 

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-Data-engineering portfolio project over Curitiba's open data (SIAC 156 citizen requests). Requirements live in `docs/data_siac_demanda.md`; the phased plan (and the source of truth for architecture/stack decisions) is `docs/data_siac_plano.md`. Phases 1 (exploration: `notebooks/00_exploracao.ipynb`, `docs/adr/0001-chave-e-historico-das-solicitacoes.md`) 2 (skeleton + CI), 3 (ingestion → Bronze), 4 (Pandera input contract), 5 (dbt models) and 6 (FastAPI) are done. Docs, comments and log messages are written in Portuguese.
+Data-engineering portfolio project over Curitiba's open data (SIAC 156 citizen requests). Requirements live in `docs/data_siac_demanda.md`; the phased plan (and the source of truth for architecture/stack decisions) is `docs/data_siac_plano.md`. Phases 1 (exploration: `notebooks/00_exploracao.ipynb`, `docs/adr/0001-chave-e-historico-das-solicitacoes.md`) 2 (skeleton + CI), 3 (ingestion → Bronze), 4 (Pandera input contract), 5 (dbt models), 6 (FastAPI) and 7 (ECharts dashboard, report, GitHub Pages) are done. Docs, comments and log messages are written in Portuguese.
 
 ## Environment
 
@@ -22,7 +22,8 @@ make format                           # ruff autofix + format
 uv run pytest tests/test_cli.py::test_version   # single test
 make ingest                           # real ingestion of the latest snapshot (network, ~13 s)
 make transform                        # dbt build over Bronze (~7 s); make docs → lineage HTML
-make api                              # FastAPI on :8000 (/docs)
+make api                              # FastAPI on :8000 (/painel dashboard, /docs)
+make site                             # docs + static site in site/ (what GitHub Pages serves)
 make explore                          # re-execute the exploration notebook (needs data/raw/)
 uv run pytest -m "not slow"           # skip real dbt builds and API tests (~30 s)
 ```
@@ -42,6 +43,10 @@ Tests never hit the network: `respx` mocks httpx, and `tests/conftest.py::make_c
 ## API and warehouse concurrency
 
 `api/main.py::create_app(data_dir)` (module-level `app` reads `CWBDATASIAC_DATA_DIR`) serves marts and `controle` tables. `api/db.py::Warehouse.query` opens a **read-only DuckDB connection per query** and closes it; a `duckdb.IOException` (locked or missing file) becomes `WarehouseUnavailable` → 503 with `Retry-After`. DuckDB forbids readers in other processes while a writer holds the file and vice versa, so every **writer** goes through `warehouse_lock.py::retry_on_lock` (control.connect and `transform._invoke_waiting_for_lock`); lock errors are detected by message because dbt wraps the DuckDB exception. Never expose `logradouro` from the API. Routers build SQL only from fixed fragments; user input is always a bound parameter. API tests (`tests/api/`) build a real warehouse once per session by running dbt in a **subprocess** (in-process dbt would keep the file open and block read-only connections).
+
+## Dashboard, report and site
+
+`dashboard/` is plain HTML/CSS/JS (ECharts 6 from jsDelivr), served by the API at `/painel` and copied into `site/` for GitHub Pages. `js/app.js` detects the mode: if `data/manifest.json` exists it reads `data/<key>.json`, otherwise it calls the API routes in its `SOURCES` map. That map **must stay identical** to `cwbdatasiac.site.SOURCES` (enforced by `tests/api/test_site.py`). `site.collect` produces the JSON by calling the API in-process (TestClient), so both modes see the same shapes; `/solicitacoes` is never exported (Pages gets aggregates only). `report/` renders `templates/relatorio.html.j2` with findings computed from the same data — write findings so they stay true when data changes (and when small datasets trigger fallbacks). Charts follow the dataviz skill's reference palette (CSS custom properties, light + dark), single-series charts have no legend, every chart has a table view, numbers are formatted pt-BR. Render and screenshot (Playwright is in the `browser` extra) after visual changes — several bugs here were only visible on screen. `.github/workflows/pages.yml` (manual dispatch) runs ingest → transform → docs → site → deploy and keeps `data/bronze` + `warehouse.duckdb` in the Actions cache between runs.
 
 ## Logging convention
 

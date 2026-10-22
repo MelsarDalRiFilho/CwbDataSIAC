@@ -1,0 +1,75 @@
+name: Pages
+
+# Roda o pipeline completo e publica o site estático (painel, relatório e linhagem).
+# Por enquanto só sob demanda; o agendamento diário entra na fase 8.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.3.1
+        with:
+          enable-cache: true
+
+      - name: Instalar dependências
+        run: uv sync --locked
+
+      # Bronze e warehouse de execuções anteriores: sem isso o histórico agregado
+      # recomeçaria do zero a cada publicação. O CSV bruto (~123 MB) não entra.
+      - name: Restaurar histórico
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            data/bronze
+            data/warehouse.duckdb
+          key: dados-${{ github.run_id }}
+          restore-keys: dados-
+
+      - name: Ingestão
+        run: uv run cwbdatasiac ingest --no-navegador
+
+      - name: Transformação (dbt build)
+        run: uv run cwbdatasiac transform
+
+      - name: Linhagem do dbt
+        run: uv run cwbdatasiac docs
+
+      - name: Montar site
+        run: uv run cwbdatasiac site --saida site
+
+      - name: Salvar histórico
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            data/bronze
+            data/warehouse.duckdb
+          key: dados-${{ github.run_id }}
+
+      - uses: actions/configure-pages@v6
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

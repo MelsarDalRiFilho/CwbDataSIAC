@@ -15,7 +15,7 @@ Cada item de [data_siac_demanda.md](data_siac_demanda.md) e onde ele é atendido
 | Armazenar os dados | Bronze em CSV + Parquet; warehouse DuckDB | Arquitetura e stack | 3 e 5 |
 | Aplicar dbt | `dbt-duckdb`: staging, intermediate, marts, histórico agregado incremental | Modelagem dbt | 5 |
 | Validar os dados | Pandera na entrada; testes dbt + `dbt-expectations` na saída | Arquitetura e stack | 4 e 5 |
-| Apresentar relatório e dashboard em Apache ECharts | Relatório Quarto + painel ECharts (local e GitHub Pages) | Painéis no ECharts | 7 |
+| Apresentar relatório e dashboard em Apache ECharts | Relatório HTML (Jinja2 + ECharts) + painel ECharts (local e GitHub Pages) | Painéis no ECharts | 7 |
 | Escrever testes | pytest (unitários, integração, API, falhas) + testes dbt, cobertura ≥ 80% | Estratégia de testes | 2 a 7 |
 
 ## Avaliação da fonte
@@ -79,7 +79,7 @@ O fluxo segue a arquitetura medalhão; logs, controle de execuções e orquestra
 | 5. Armazenamento | Bronze: Parquet zstd de todo snapshot (\~5,8 MB cada) + CSV bruto só das 3 datas mais recentes. Warehouse: DuckDB | Arquivo único, rápido para 123 MB, zero infraestrutura, sem gastar \~45 GB/ano com CSV |
 | 6. dbt | `dbt-duckdb`, camadas staging, intermediate, marts + modelo incremental de histórico agregado | Mostra modelagem dimensional e materialização incremental, sem chave falsa (ADR 0001) |
 | 7. Validação dos dados | Pandera no contrato de entrada; testes do dbt + `dbt-expectations`; relatório de qualidade | Validação em duas portas: antes de carregar e depois de transformar |
-| 8. Relatório | Quarto (ou Jinja2) gerando HTML/PDF a partir da Gold; `dbt docs` publicado | Relatório analítico com achados + documentação de linhagem |
+| 8. Relatório | Jinja2 + ECharts gerando HTML com achados calculados dos indicadores; `dbt docs` publicado | Relatório analítico com achados + documentação de linhagem |
 | 9. Dashboard | Apache ECharts em HTML/JS estático, servido pela FastAPI e publicado no GitHub Pages | Demo ao vivo no README sem servidor pago |
 | 10. Testes | `pytest`, `pytest-cov`, `respx`, `TestClient`, testes dbt | Cobertura de cada camada, inclusive cenários de falha |
 | Orquestração | `Makefile` + GitHub Actions agendado (diário); Dagster como evolução opcional | Simples primeiro, escalável depois |
@@ -127,7 +127,15 @@ flowchart LR
 - **Lado do pipeline:** a ingestão e o dbt tentam de novo, com espera aleatória, por até 60 s (`warehouse_lock.py`).
 - **Por que o lado do pipeline foi necessário:** medido com a API sob tráfego contínuo, cerca de 70% das tentativas de abrir o banco para gravar eram barradas.
 
-**Painéis no ECharts.** Cartões de KPI (total, % respondidas, mediana de dias até resposta); linha diária de solicitações; evolução diária de solicitações em aberto (do histórico agregado); barras dos 15 assuntos mais frequentes; treemap órgão → assunto; mapa de calor dia da semana × mês (a fonte não tem hora); boxplot do tempo de resposta por órgão; mapa coroplético por bairro (exige o GeoJSON de bairros do IPPUC, a confirmar).
+**Painéis no ECharts** (implementados na fase 7; paleta validada para daltonismo nos modos claro e escuro, com "Ver tabela" em todos os gráficos):
+- Cartões de KPI: total, taxa de resposta, pendentes, mediana até a resposta e mediana em aberto.
+- Série de criadas e respondidas por dia, semana ou mês.
+- Mapa coroplético por bairro, com a divisa do IPPUC convertida por `scripts/build_bairros_geojson.py`.
+- 15 assuntos mais frequentes.
+- Treemap órgão → assunto, num único tom.
+- Mediana e p90 de dias até a resposta por órgão. Saiu do boxplot previsto porque não exportamos a distribuição inteira.
+- Mapa de calor de mês × dia da semana.
+- Situação em cada snapshot (barras empilhadas).
 
 ## Validação da execução e logs
 
@@ -206,13 +214,14 @@ CwbDataSIAC/
 │   ├── api/                   # FastAPI: main.py, routers/, schemas.py, db.py (conexão curta)
 │   ├── transform.py           # dbtRunner + espera pelo lock
 │   ├── warehouse_lock.py      # retry de escrita quando a API está lendo
-│   └── export/static_json.py  # gera JSON para o dashboard no Pages
+│   ├── site.py                # site estático: dashboard + JSON da API + relatório + dbt docs
+│   └── report/                # relatório Jinja2 com achados calculados
 ├── dbt/siac156/
 │   ├── models/staging | intermediate | marts
 │   ├── tests/  macros/  seeds/   # seeds: nomes de exibição de órgãos e regionais
 │   └── dbt_project.yml, profiles.yml   # caminho dos dados via CWBDATASIAC_DATA_DIR
-├── dashboard/                 # index.html + js/ com Apache ECharts
-├── reports/                   # relatório Quarto (.qmd) e saídas
+├── dashboard/                 # index.html, css/, js/app.js (ECharts), geo/bairros.geojson (IPPUC)
+├── scripts/                   # build_bairros_geojson.py (shapefile IPPUC → GeoJSON)
 ├── notebooks/00_exploracao.ipynb
 ├── tests/                     # pytest: unitários, integração, API, cenários de falha
 │   └── fixtures/              # amostra do CSV (válida e quebrada)
@@ -231,7 +240,11 @@ Oito fases curtas, cada uma terminando num commit que funciona sozinho. Assim o 
 4. **Contrato e validação de entrada.** Schema Pandera (colunas, tipos, datas válidas, domínios de Situação e Origem); carga rejeitada vai para quarentena com relatório. *Pronto quando:* um CSV com coluna faltando falha com mensagem clara. **✅ Concluída em 22/10/2026:** contrato com severidade bloqueante ou de alerta e tolerância percentual; a coluna faltando já é barrada pela checagem de cabeçalho da fase 3. O snapshot real de 21/10 (629.180 linhas) passou com 0 violações, e a validação leva cerca de 0,6 s. São 69 testes, com 99% de cobertura.
 5. **dbt.** Staging, dimensões, fato do último snapshot, histórico agregado incremental e agregados; testes `not_null`, `unique`, `accepted_values`, `relationships` e regras como `DataResposta >= DataCriacao`; `dbt docs`. *Pronto quando:* `dbt build` verde e linhagem publicada. **✅ Concluída em 22/10/2026:** `cwbdatasiac transform` / `make transform` rodou com 56 de 56 nós verdes sobre os snapshots reais de 20 e 21/10 (cerca de 7 s), e `make docs` gera a linhagem em `dbt/siac156/target/static_index.html`. A publicação dessa página no GitHub Pages fica para a fase 8, junto com o dashboard. São 78 testes pytest, com 99% de cobertura.
 6. **FastAPI.** Conexão somente leitura ao DuckDB, modelos Pydantic, filtros, paginação, testes com `TestClient`. *Pronto quando:* `/docs` mostra todos os endpoints e os testes passam. **✅ Concluída em 22/10/2026:** 12 rotas, `cwbdatasiac api` / `make api`, e de 20 a 70 ms por requisição sobre os dados reais. Num teste de estresse com a API sob tráfego contínuo, 5 de 5 `transform` e 3 de 3 `ingest` passaram, e a API respondeu 503 durante as gravações. São 113 testes, com 99% de cobertura.
-7. **Dashboard ECharts e relatório.** Painel consumindo a API localmente e JSON estático no GitHub Pages; relatório Quarto com 5 a 8 achados (assuntos mais demandados, bairros, tempo de resposta por órgão, sazonalidade). *Pronto quando:* link público do dashboard funcionando.
+7. **Dashboard ECharts e relatório.** Painel consumindo a API localmente e JSON estático no GitHub Pages; relatório Quarto com 5 a 8 achados (assuntos mais demandados, bairros, tempo de resposta por órgão, sazonalidade). *Pronto quando:* link público do dashboard funcionando. **✅ Concluída em 22/10/2026:**
+   - O painel é o mesmo nos dois modos: servido pela API em `/painel` ou estático no Pages, e detecta o modo sozinho.
+   - O relatório tem 7 achados com números recalculados a cada geração (Jinja2 em vez de Quarto, para não exigir outro binário).
+   - O workflow `pages.yml`, acionado manualmente, roda ingest → dbt → docs → site → deploy e guarda a Bronze e o warehouse em cache entre execuções.
+   - O Pages publica só agregados; `/solicitacoes` não é exportado.
 8. **Automação e vitrine.** Workflow diário atualizando o Pages e notificando falhas, badges (CI, cobertura), diagrama de arquitetura, GIF do dashboard, seção "decisões técnicas" e "próximos passos" (Dagster, Postgres, Great Expectations). *Pronto quando:* o README conta a história em 2 minutos de leitura.
 
 ## Riscos e decisões
@@ -246,6 +259,7 @@ O maior risco técnico é a falta de identificador, e ele vira um bom tema para 
 | Fonte indisponível ou arquivo corrompido | Carga parcial ou dados errados no dashboard | Checagens pós-captura, quarentena, dashboard mantém o último snapshot válido |
 | `Logradouro` com endereço | Exposição desnecessária (LGPD) | Publicar agregados por bairro; endereço só na camada interna |
 | 117 MB por dia no GitHub | Repositório pesado | Dados fora do git; Pages recebe só JSON agregado |
+| Cache do Actions expira (7 dias sem uso, limite de 10 GB) | O histórico agregado publicado recomeça do zero | Na fase 8, com execução diária, o cache não fica parado; avaliar guardar a Bronze em release ou branch de dados |
 | API e pipeline disputando o arquivo do DuckDB | Pipeline falha ou API fica fora | Conexão curta na API (503 + `Retry-After`) e retry de até 60 s na escrita. Se o tráfego crescer, a evolução é publicar um banco separado só para leitura |
 
 **Decisões tomadas:**
@@ -258,6 +272,8 @@ O maior risco técnico é a falta de identificador, e ele vira um bom tema para 
 - Sem chave por solicitação: fato do último snapshot + histórico agregado incremental ([ADR 0001](adr/0001-chave-e-historico-das-solicitacoes.md)).
 - Testes do dbt nativos + `expression_is_true` próprio, sem `dbt-expectations`; dbt e API testados de verdade no pytest sobre uma Bronze sintética.
 - API lê o mesmo `warehouse.duckdb` com conexões curtas por requisição; o pipeline espera o lock.
+- Relatório em HTML (Jinja2 + ECharts) em vez de Quarto; mapa com a divisa de bairros do IPPUC, com atribuição.
+- Pages publicado por Actions sob demanda; histórico entre execuções guardado em cache do Actions (a decidir na fase 8 se precisa de armazenamento durável).
 
 **Decisões em aberto** (minhas recomendações entre parênteses):
 

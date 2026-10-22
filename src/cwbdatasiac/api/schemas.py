@@ -78,6 +78,11 @@ class PorOrgao(BaseModel):
     pendentes: int
 
 
+class PorOrigem(BaseModel):
+    origem: str
+    solicitacoes: int
+
+
 class PorAssunto(BaseModel):
     orgao: str
     assunto: str

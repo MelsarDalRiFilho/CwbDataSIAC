@@ -108,3 +108,30 @@ def api(
     from cwbdatasiac.api.main import create_app
 
     uvicorn.run(create_app(data_dir), host=host, port=port)
+
+
+@app.command()
+def report(
+    data_dir: Annotated[Path, typer.Option(help="Diretório de dados.")] = Path("data"),
+    saida: Annotated[Path, typer.Option(help="Arquivo HTML gerado.")] = Path(
+        "reports/relatorio.html"
+    ),
+) -> None:
+    """Gera o relatório analítico em HTML a partir dos indicadores."""
+    from cwbdatasiac.report import render_report
+    from cwbdatasiac.site import collect
+
+    saida.parent.mkdir(parents=True, exist_ok=True)
+    saida.write_text(render_report(collect(data_dir)), encoding="utf-8")
+    typer.echo(f"relatório: {saida}")
+
+
+@app.command()
+def site(
+    data_dir: Annotated[Path, typer.Option(help="Diretório de dados.")] = Path("data"),
+    saida: Annotated[Path, typer.Option(help="Diretório do site.")] = Path("site"),
+) -> None:
+    """Monta o site estático (painel, JSON agregados, relatório, linhagem do dbt)."""
+    from cwbdatasiac.site import build_site
+
+    typer.echo(f"site: {build_site(data_dir, saida)}")

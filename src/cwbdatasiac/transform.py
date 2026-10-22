@@ -10,10 +10,11 @@ from pathlib import Path
 
 from dbt.cli.main import dbtRunner, dbtRunnerResult
 
+from cwbdatasiac.config import REPO_ROOT
 from cwbdatasiac.observability import run_context
 from cwbdatasiac.warehouse_lock import is_lock_error, retry_on_lock
 
-DBT_PROJECT_DIR = Path(__file__).resolve().parents[2] / "dbt" / "siac156"
+DBT_PROJECT_DIR = REPO_ROOT / "dbt" / "siac156"
 DATA_DIR_ENV = "CWBDATASIAC_DATA_DIR"
 
 log = logging.getLogger(__name__)
