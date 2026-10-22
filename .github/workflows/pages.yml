@@ -1,18 +1,26 @@
-name: Pages
+name: Atualização diária
 
-# Roda o pipeline completo e publica o site estático (painel, relatório e linhagem).
-# Por enquanto só sob demanda; o agendamento diário entra na fase 8.
+# Roda o pipeline completo e publica o site (painel, relatório, linhagem e badges).
+# O arquivo do dia D sai por volta das 05h30 (Brasília) de D+1; rodamos às 06h30.
+# Se a fonte atrasar, a ingestão termina como `sem_novidade` e o site é republicado igual.
 on:
+  schedule:
+    - cron: "30 9 * * *"
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write   # release `dados` com o histórico da Bronze
   pages: write
   id-token: write
+  issues: write     # issue automática em caso de falha
 
 concurrency:
   group: pages
   cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  RELEASE: dados
 
 jobs:
   build:
@@ -27,16 +35,24 @@ jobs:
       - name: Instalar dependências
         run: uv sync --locked
 
-      # Bronze e warehouse de execuções anteriores: sem isso o histórico agregado
-      # recomeçaria do zero a cada publicação. O CSV bruto (~123 MB) não entra.
-      - name: Restaurar histórico
+      # O warehouse é derivado da Bronze: o cache só evita reconstruí-lo e preserva o
+      # histórico de execuções. A fonte durável do histórico é a release `dados`.
+      - name: Restaurar warehouse
         uses: actions/cache/restore@v6
         with:
-          path: |
-            data/bronze
-            data/warehouse.duckdb
-          key: dados-${{ github.run_id }}
-          restore-keys: dados-
+          path: data/warehouse.duckdb
+          key: warehouse-${{ github.run_id }}
+          restore-keys: warehouse-
+
+      - name: Restaurar histórico da Bronze (release dados)
+        run: |
+          gh release view "$RELEASE" > /dev/null 2>&1 || gh release create "$RELEASE" \
+            --title "Histórico da camada Bronze" --latest=false \
+            --notes "Um Parquet por snapshot diário do SIAC 156 (dados abertos da Prefeitura de Curitiba, CC BY 4.0). Mantido pelo workflow Atualização diária."
+          mkdir -p historico
+          gh release download "$RELEASE" --pattern 'bronze_siac156_*.parquet' --dir historico \
+            || echo "release ainda sem assets"
+          uv run cwbdatasiac historico importar historico
 
       - name: Ingestão
         run: uv run cwbdatasiac ingest --no-navegador
@@ -47,16 +63,27 @@ jobs:
       - name: Linhagem do dbt
         run: uv run cwbdatasiac docs
 
-      - name: Montar site
-        run: uv run cwbdatasiac site --saida site
+      - name: Testes
+        run: uv run pytest -q --cov-report=json
 
-      - name: Salvar histórico
+      - name: Montar site
+        run: |
+          uv run cwbdatasiac site --saida site
+          uv run python scripts/coverage_badge.py coverage.json site/badges/coverage.json
+
+      - name: Publicar snapshots novos na release
+        run: |
+          gh release view "$RELEASE" --json assets -q '.assets[].name' > publicados.txt
+          uv run cwbdatasiac historico exportar novos --existentes publicados.txt
+          if compgen -G "novos/*.parquet" > /dev/null; then
+            gh release upload "$RELEASE" novos/*.parquet
+          fi
+
+      - name: Salvar warehouse
         uses: actions/cache/save@v6
         with:
-          path: |
-            data/bronze
-            data/warehouse.duckdb
-          key: dados-${{ github.run_id }}
+          path: data/warehouse.duckdb
+          key: warehouse-${{ github.run_id }}
 
       - uses: actions/configure-pages@v6
 
@@ -73,3 +100,30 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v5
+
+  # Abre (ou comenta em) uma issue quando a atualização falha e a fecha quando volta a passar.
+  notificar:
+    needs: [build, deploy]
+    if: always()
+    runs-on: ubuntu-latest
+    env:
+      GH_REPO: ${{ github.repository }}
+      BUILD: ${{ needs.build.result }}
+      DEPLOY: ${{ needs.deploy.result }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Atualizar issue de falha
+        run: |
+          label=atualizacao-diaria
+          aberta=$(gh issue list --state open --label "$label" --json number -q '.[0].number')
+          if [ "$BUILD" = failure ] || [ "$DEPLOY" = failure ]; then
+            corpo="A execução $RUN_URL falhou (build: $BUILD, deploy: $DEPLOY). Veja o log da etapa com erro; a ingestão registra etapa e motivo em controle.ingestao_execucoes."
+            if [ -n "$aberta" ]; then
+              gh issue comment "$aberta" --body "$corpo"
+            else
+              gh label create "$label" --color B60205 --description "Falha no workflow diário" --force
+              gh issue create --title "Falha na atualização diária" --label "$label" --body "$corpo"
+            fi
+          elif [ -n "$aberta" ] && [ "$BUILD" = success ] && [ "$DEPLOY" = success ]; then
+            gh issue close "$aberta" --comment "Voltou a funcionar em $RUN_URL."
+          fi

@@ -135,3 +135,35 @@ def site(
     from cwbdatasiac.site import build_site
 
     typer.echo(f"site: {build_site(data_dir, saida)}")
+
+
+historico_app = typer.Typer(help="Histórico durável da Bronze (assets da release `dados`).")
+app.add_typer(historico_app, name="historico")
+
+
+@historico_app.command("importar")
+def historico_importar(
+    origem: Annotated[Path, typer.Argument(help="Pasta com bronze_siac156_*.parquet.")],
+    data_dir: Annotated[Path, typer.Option(help="Diretório de dados.")] = Path("data"),
+) -> None:
+    """Restaura na Bronze as partições que ainda não existem localmente."""
+    from cwbdatasiac.historico import importar
+
+    importados = importar(origem, IngestSettings(data_dir=data_dir).bronze_dir)
+    typer.echo(f"{len(importados)} partição(ões) importada(s)")
+
+
+@historico_app.command("exportar")
+def historico_exportar(
+    destino: Annotated[Path, typer.Argument(help="Pasta de saída dos assets.")],
+    existentes: Annotated[
+        Path | None, typer.Option(help="Arquivo com os nomes de assets já publicados.")
+    ] = None,
+    data_dir: Annotated[Path, typer.Option(help="Diretório de dados.")] = Path("data"),
+) -> None:
+    """Gera os assets das partições que ainda não foram publicadas."""
+    from cwbdatasiac.historico import exportar
+
+    publicados = set(existentes.read_text().split()) if existentes else set()
+    novos = exportar(IngestSettings(data_dir=data_dir).bronze_dir, destino, publicados)
+    typer.echo(f"{len(novos)} asset(s) novo(s)")

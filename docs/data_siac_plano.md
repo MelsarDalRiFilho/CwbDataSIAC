@@ -245,7 +245,12 @@ Oito fases curtas, cada uma terminando num commit que funciona sozinho. Assim o 
    - O relatório tem 7 achados com números recalculados a cada geração (Jinja2 em vez de Quarto, para não exigir outro binário).
    - O workflow `pages.yml`, acionado manualmente, roda ingest → dbt → docs → site → deploy e guarda a Bronze e o warehouse em cache entre execuções.
    - O Pages publica só agregados; `/solicitacoes` não é exportado.
-8. **Automação e vitrine.** Workflow diário atualizando o Pages e notificando falhas, badges (CI, cobertura), diagrama de arquitetura, GIF do dashboard, seção "decisões técnicas" e "próximos passos" (Dagster, Postgres, Great Expectations). *Pronto quando:* o README conta a história em 2 minutos de leitura.
+8. **Automação e vitrine.** Workflow diário atualizando o Pages e notificando falhas, badges (CI, cobertura), diagrama de arquitetura, GIF do dashboard, seção "decisões técnicas" e "próximos passos" (Dagster, Postgres, Great Expectations). *Pronto quando:* o README conta a história em 2 minutos de leitura. **✅ Concluída em 22/10/2026:**
+   - O workflow `pages.yml` ("Atualização diária") roda às 06h30 de Brasília e sob demanda.
+   - O histórico durável da Bronze fica na release `dados`, com um Parquet por snapshot; o warehouse fica em cache e é reconstruído pelo dbt quando falta.
+   - Em caso de falha, o workflow abre ou comenta uma issue, e ela é fechada sozinha quando volta a passar.
+   - O README ganhou badges (CI, atualização, cobertura via endpoint do shields.io publicado no Pages, licença), GIF do painel, achados, decisões técnicas e próximos passos.
+   - O projeto passa a ter licença MIT.
 
 ## Riscos e decisões
 
@@ -259,7 +264,7 @@ O maior risco técnico é a falta de identificador, e ele vira um bom tema para 
 | Fonte indisponível ou arquivo corrompido | Carga parcial ou dados errados no dashboard | Checagens pós-captura, quarentena, dashboard mantém o último snapshot válido |
 | `Logradouro` com endereço | Exposição desnecessária (LGPD) | Publicar agregados por bairro; endereço só na camada interna |
 | 117 MB por dia no GitHub | Repositório pesado | Dados fora do git; Pages recebe só JSON agregado |
-| Cache do Actions expira (7 dias sem uso, limite de 10 GB) | O histórico agregado publicado recomeça do zero | Na fase 8, com execução diária, o cache não fica parado; avaliar guardar a Bronze em release ou branch de dados |
+| Cache do Actions expira (7 dias sem uso, limite de 10 GB) | Warehouse precisa ser reconstruído | Resolvido na fase 8: a Bronze fica na release `dados`; sem cache, o dbt reconstrói o warehouse (perde-se só o histórico de execuções da tabela de controle) |
 | API e pipeline disputando o arquivo do DuckDB | Pipeline falha ou API fica fora | Conexão curta na API (503 + `Retry-After`) e retry de até 60 s na escrita. Se o tráfego crescer, a evolução é publicar um banco separado só para leitura |
 
 **Decisões tomadas:**
@@ -273,7 +278,8 @@ O maior risco técnico é a falta de identificador, e ele vira um bom tema para 
 - Testes do dbt nativos + `expression_is_true` próprio, sem `dbt-expectations`; dbt e API testados de verdade no pytest sobre uma Bronze sintética.
 - API lê o mesmo `warehouse.duckdb` com conexões curtas por requisição; o pipeline espera o lock.
 - Relatório em HTML (Jinja2 + ECharts) em vez de Quarto; mapa com a divisa de bairros do IPPUC, com atribuição.
-- Pages publicado por Actions sob demanda; histórico entre execuções guardado em cache do Actions (a decidir na fase 8 se precisa de armazenamento durável).
+- Pages publicado por Actions diariamente; histórico durável da Bronze na release `dados`, warehouse em cache.
+- Falhas da atualização diária abrem uma issue automática; licença MIT.
 
 **Decisões em aberto** (minhas recomendações entre parênteses):
 

@@ -16,3 +16,4 @@ dbt/siac156/dbt_packages/
 dbt/siac156/.user.yml
 site/
 reports/
+coverage.json
