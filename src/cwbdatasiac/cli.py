@@ -94,3 +94,17 @@ def docs(
     """Gera a documentação e a linhagem do dbt (dbt/siac156/target/static_index.html)."""
     if not run_dbt(["docs", "generate", "--static"], data_dir):
         raise typer.Exit(code=1)
+
+
+@app.command()
+def api(
+    data_dir: Annotated[Path, typer.Option(help="Diretório de dados.")] = Path("data"),
+    host: Annotated[str, typer.Option(help="Interface de rede.")] = "127.0.0.1",
+    port: Annotated[int, typer.Option(help="Porta HTTP.")] = 8000,
+) -> None:
+    """Sobe a API (documentação interativa em /docs)."""
+    import uvicorn
+
+    from cwbdatasiac.api.main import create_app
+
+    uvicorn.run(create_app(data_dir), host=host, port=port)

@@ -1,4 +1,4 @@
-.PHONY: install install-browser lint format test check ingest transform docs pipeline explore
+.PHONY: install install-browser lint format test check ingest transform docs pipeline api explore
 
 install:  ## instala dependências e os hooks de pre-commit
 	uv sync
@@ -31,6 +31,9 @@ docs:  ## documentação e linhagem do dbt em dbt/siac156/target/static_index.ht
 	uv run cwbdatasiac docs
 
 pipeline: ingest transform  ## ingestão seguida do dbt
+
+api:  ## sobe a API em http://127.0.0.1:8000 (docs em /docs)
+	uv run cwbdatasiac api
 
 explore:  ## reexecuta o notebook de exploração (precisa de data/raw/)
 	uv run --group explore jupyter nbconvert --to notebook --execute --inplace notebooks/00_exploracao.ipynb

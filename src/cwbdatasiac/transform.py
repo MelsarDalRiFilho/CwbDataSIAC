@@ -8,14 +8,37 @@ import logging
 import os
 from pathlib import Path
 
-from dbt.cli.main import dbtRunner
+from dbt.cli.main import dbtRunner, dbtRunnerResult
 
 from cwbdatasiac.observability import run_context
+from cwbdatasiac.warehouse_lock import is_lock_error, retry_on_lock
 
 DBT_PROJECT_DIR = Path(__file__).resolve().parents[2] / "dbt" / "siac156"
 DATA_DIR_ENV = "CWBDATASIAC_DATA_DIR"
 
 log = logging.getLogger(__name__)
+
+
+def _invoke_waiting_for_lock(args: list[str]) -> dbtRunnerResult:
+    """Repete o dbt se ele não conseguir o lock do warehouse.
+
+    O dbt-duckdb abre o banco antes de executar qualquer nó, e o `dbt build` é
+    idempotente (tabelas recriadas, incremental por delete+insert), então repetir é
+    seguro. Esgotado o tempo, devolve a última falha.
+    """
+
+    def attempt() -> dbtRunnerResult:
+        result = dbtRunner().invoke(args)
+        if not result.success and is_lock_error(result.exception):
+            raise result.exception
+        return result
+
+    try:
+        return retry_on_lock(attempt)
+    except BaseException as exc:
+        if not is_lock_error(exc):
+            raise
+        return dbtRunnerResult(success=False, exception=exc)
 
 
 def run_dbt(command: list[str], data_dir: Path, extra_args: list[str] | None = None) -> bool:
@@ -33,7 +56,7 @@ def run_dbt(command: list[str], data_dir: Path, extra_args: list[str] | None = N
     try:
         with run_context():
             log.info("dbt iniciado", extra={"etapa": "dbt", "comando": " ".join(command)})
-            result = dbtRunner().invoke(args)
+            result = _invoke_waiting_for_lock(args)
             if result.success:
                 log.info("dbt concluído", extra={"etapa": "dbt", "comando": " ".join(command)})
             else:

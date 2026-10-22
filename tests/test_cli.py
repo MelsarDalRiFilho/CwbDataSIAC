@@ -86,3 +86,16 @@ def test_dbt_commands(tmp_path, monkeypatch, args, expected_command, success):
 
     assert calls == [expected_command]
     assert result.exit_code == (0 if success else 1)
+
+
+def test_api_command_starts_uvicorn(tmp_path, monkeypatch):
+    import uvicorn
+
+    started = {}
+    monkeypatch.setattr(uvicorn, "run", lambda app, host, port: started.update(app=app, port=port))
+
+    result = runner.invoke(app, ["--log-dir", str(tmp_path), "api", "--port", "9000"])
+
+    assert result.exit_code == 0
+    assert started["port"] == 9000
+    assert started["app"].title.startswith("CwbDataSIAC")

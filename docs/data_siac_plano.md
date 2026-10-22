@@ -107,7 +107,25 @@ flowchart LR
   - `dim_localidade` (grão **bairro × regional**): na fonte, 13 bairros aparecem em 2 ou 3 regionais, então a regional não pode ser atributo do bairro.
 - **Agregados:** `agg_diario` (criadas e respondidas por dia, com zero nos dias vazios) e `agg_tempo_resposta` por órgão. Neste último, a mediana e o p90 consideram só as respondidas, e `pendentes` e `mediana_dias_em_aberto` aparecem ao lado para expor o viés de censura.
 
-**Endpoints da API.** `/health`, `/ingestoes` (metadados e status de cada execução, lidos de `ingestao_execucoes`), `/solicitacoes` (filtros e paginação), `/indicadores/resumo`, `/indicadores/serie-temporal`, `/indicadores/por-orgao`, `/indicadores/por-bairro`, `/indicadores/tempo-resposta`, `/qualidade` (resultado dos testes da última carga).
+**Endpoints da API** (implementados na fase 6; documentação interativa em `/docs`):
+
+| Rota | Conteúdo | Fonte |
+| --- | --- | --- |
+| `/health` | `ok` ou `indisponivel` e o snapshot servido (sempre 200) | `fct_solicitacoes` |
+| `/ingestoes` | execuções da ingestão, filtro por `status` | `controle.ingestao_execucoes` |
+| `/qualidade` | última ingestão, última carga e as violações de contrato dessa carga | tabelas de `controle` |
+| `/solicitacoes` | linhas do último snapshot, sem logradouro; filtros por órgão, assunto, bairro, regional, origem, tipo, situação, respondida e período; paginação (`tamanho` ≤ 500) | fato + dimensões |
+| `/indicadores/resumo` | KPIs: total, respondidas, pendentes, taxa, medianas de resposta e de pendência | `fct_solicitacoes` |
+| `/indicadores/serie-temporal` | criadas e respondidas por dia, semana ou mês | `agg_diario` |
+| `/indicadores/por-orgao`, `/por-assunto`, `/por-bairro` | rankings (o treemap usa `/por-assunto`) | fato + dimensões |
+| `/indicadores/tempo-resposta` | mediana, p90, pendentes e idade dos pendentes por órgão | `agg_tempo_resposta` |
+| `/indicadores/historico-situacao` | quantidade por situação em cada snapshot | `fct_snapshot_agregado` |
+| `/indicadores/dia-semana-mes` | mapa de calor de mês × dia da semana | fato + `dim_data` |
+
+**Concorrência com o pipeline.** O DuckDB não aceita leitores de outro processo enquanto alguém grava, nem o contrário.
+- **Lado da API:** cada consulta abre uma conexão somente leitura e a fecha em milissegundos. Se o arquivo estiver travado, a resposta é **503** com `Retry-After: 10`.
+- **Lado do pipeline:** a ingestão e o dbt tentam de novo, com espera aleatória, por até 60 s (`warehouse_lock.py`).
+- **Por que o lado do pipeline foi necessário:** medido com a API sob tráfego contínuo, cerca de 70% das tentativas de abrir o banco para gravar eram barradas.
 
 **Painéis no ECharts.** Cartões de KPI (total, % respondidas, mediana de dias até resposta); linha diária de solicitações; evolução diária de solicitações em aberto (do histórico agregado); barras dos 15 assuntos mais frequentes; treemap órgão → assunto; mapa de calor dia da semana × mês (a fonte não tem hora); boxplot do tempo de resposta por órgão; mapa coroplético por bairro (exige o GeoJSON de bairros do IPPUC, a confirmar).
 
@@ -154,7 +172,8 @@ A demanda pede que a camada de obtenção valide se o serviço foi executado cor
 | Bronze | CSV → Parquet preserva linhas e tipos; reexecução não duplica | `pytest` + amostra em `tests/fixtures/` |
 | Contrato de entrada | CSV válido passa; coluna faltando, data inválida ou domínio fora da lista falham com mensagem clara | Pandera |
 | dbt | `dbt build` real sobre uma Bronze sintética (2 ou 3 snapshots, com linhas idênticas), incremental e falha. Dentro do dbt: 42 testes de dados e 1 teste unitário do staging. Os testes de integridade (chaves, `relationships`, fato = Bronze, soma do agregado = Bronze por snapshot) falham o build; os de qualidade que o contrato já tolera (`accepted_values`, `DataResposta >= DataCriacao`) são `warn` | `dbt-duckdb`, testes nativos + `expression_is_true` próprio, pytest (`-m slow`) |
-| API | Status, schemas, filtros e paginação de cada endpoint | `TestClient` sobre DuckDB de teste |
+| API | Status, valores exatos, filtros, paginação, 422 em parâmetros inválidos, 503 com warehouse ausente ou travado por outro processo, ausência de logradouro | `TestClient` sobre um warehouse real (Bronze sintética + `dbt build` em subprocesso) |
+| Concorrência | Espera pelo lock com retry, erro de lock embrulhado pelo dbt, desistência após o tempo limite, leitor real em outro processo | `pytest` + subprocesso |
 
 O CI roda tudo com uma amostra pequena do CSV versionada em `tests/fixtures/` e exige cobertura mínima de 80% (`pytest-cov`).
 
@@ -184,7 +203,9 @@ CwbDataSIAC/
 │   │   ├── control.py         # tabela controle.ingestao_execucoes
 │   │   └── bronze.py          # CSV → Parquet particionado por snapshot
 │   ├── validation/contracts.py  # schema Pandera da entrada
-│   ├── api/                   # FastAPI: main.py, routers/, schemas.py, db.py
+│   ├── api/                   # FastAPI: main.py, routers/, schemas.py, db.py (conexão curta)
+│   ├── transform.py           # dbtRunner + espera pelo lock
+│   ├── warehouse_lock.py      # retry de escrita quando a API está lendo
 │   └── export/static_json.py  # gera JSON para o dashboard no Pages
 ├── dbt/siac156/
 │   ├── models/staging | intermediate | marts
@@ -209,7 +230,7 @@ Oito fases curtas, cada uma terminando num commit que funciona sozinho. Assim o 
 3. **Ingestão, validação da execução e Bronze.** Descoberta pelo manifesto, download com retry e checksum, checagens pós-captura, tabela `ingestao_execucoes`, conversão para Parquet, módulo Playwright opcional como estratégia alternativa. Carga histórica opcional pelo espelho C3SL. *Pronto quando:* `make ingest` é idempotente (rodar duas vezes não duplica) e uma falha simulada (HTTP 500, arquivo truncado, coluna faltando) gera log, registro `falha` e exit code ≠ 0. **✅ Concluída em 21/10/2026:** `cwbdatasiac ingest` / `make ingest`, validado contra a fonte real (cerca de 13 s por carga) e com 50 testes (99% de cobertura). A carga histórica foi adiada: os arquivos antigos têm outro layout e serão tratados depois do dbt.
 4. **Contrato e validação de entrada.** Schema Pandera (colunas, tipos, datas válidas, domínios de Situação e Origem); carga rejeitada vai para quarentena com relatório. *Pronto quando:* um CSV com coluna faltando falha com mensagem clara. **✅ Concluída em 22/10/2026:** contrato com severidade bloqueante ou de alerta e tolerância percentual; a coluna faltando já é barrada pela checagem de cabeçalho da fase 3. O snapshot real de 21/10 (629.180 linhas) passou com 0 violações, e a validação leva cerca de 0,6 s. São 69 testes, com 99% de cobertura.
 5. **dbt.** Staging, dimensões, fato do último snapshot, histórico agregado incremental e agregados; testes `not_null`, `unique`, `accepted_values`, `relationships` e regras como `DataResposta >= DataCriacao`; `dbt docs`. *Pronto quando:* `dbt build` verde e linhagem publicada. **✅ Concluída em 22/10/2026:** `cwbdatasiac transform` / `make transform` rodou com 56 de 56 nós verdes sobre os snapshots reais de 20 e 21/10 (cerca de 7 s), e `make docs` gera a linhagem em `dbt/siac156/target/static_index.html`. A publicação dessa página no GitHub Pages fica para a fase 8, junto com o dashboard. São 78 testes pytest, com 99% de cobertura.
-6. **FastAPI.** Conexão somente leitura ao DuckDB, modelos Pydantic, filtros, paginação, testes com `TestClient`. *Pronto quando:* `/docs` mostra todos os endpoints e os testes passam.
+6. **FastAPI.** Conexão somente leitura ao DuckDB, modelos Pydantic, filtros, paginação, testes com `TestClient`. *Pronto quando:* `/docs` mostra todos os endpoints e os testes passam. **✅ Concluída em 22/10/2026:** 12 rotas, `cwbdatasiac api` / `make api`, e de 20 a 70 ms por requisição sobre os dados reais. Num teste de estresse com a API sob tráfego contínuo, 5 de 5 `transform` e 3 de 3 `ingest` passaram, e a API respondeu 503 durante as gravações. São 113 testes, com 99% de cobertura.
 7. **Dashboard ECharts e relatório.** Painel consumindo a API localmente e JSON estático no GitHub Pages; relatório Quarto com 5 a 8 achados (assuntos mais demandados, bairros, tempo de resposta por órgão, sazonalidade). *Pronto quando:* link público do dashboard funcionando.
 8. **Automação e vitrine.** Workflow diário atualizando o Pages e notificando falhas, badges (CI, cobertura), diagrama de arquitetura, GIF do dashboard, seção "decisões técnicas" e "próximos passos" (Dagster, Postgres, Great Expectations). *Pronto quando:* o README conta a história em 2 minutos de leitura.
 
@@ -225,6 +246,7 @@ O maior risco técnico é a falta de identificador, e ele vira um bom tema para 
 | Fonte indisponível ou arquivo corrompido | Carga parcial ou dados errados no dashboard | Checagens pós-captura, quarentena, dashboard mantém o último snapshot válido |
 | `Logradouro` com endereço | Exposição desnecessária (LGPD) | Publicar agregados por bairro; endereço só na camada interna |
 | 117 MB por dia no GitHub | Repositório pesado | Dados fora do git; Pages recebe só JSON agregado |
+| API e pipeline disputando o arquivo do DuckDB | Pipeline falha ou API fica fora | Conexão curta na API (503 + `Retry-After`) e retry de até 60 s na escrita. Se o tráfego crescer, a evolução é publicar um banco separado só para leitura |
 
 **Decisões tomadas:**
 
@@ -234,6 +256,8 @@ O maior risco técnico é a falta de identificador, e ele vira um bom tema para 
 - Carga histórica (2014–2025) adiada para depois da fase 5.
 - Contrato: valores novos de domínio só geram alerta; regras estruturais bloqueiam acima de 0,1% de linhas inválidas.
 - Sem chave por solicitação: fato do último snapshot + histórico agregado incremental ([ADR 0001](adr/0001-chave-e-historico-das-solicitacoes.md)).
+- Testes do dbt nativos + `expression_is_true` próprio, sem `dbt-expectations`; dbt e API testados de verdade no pytest sobre uma Bronze sintética.
+- API lê o mesmo `warehouse.duckdb` com conexões curtas por requisição; o pipeline espera o lock.
 
 **Decisões em aberto** (minhas recomendações entre parênteses):
 

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-Data-engineering portfolio project over Curitiba's open data (SIAC 156 citizen requests). Requirements live in `docs/data_siac_demanda.md`; the phased plan (and the source of truth for architecture/stack decisions) is `docs/data_siac_plano.md`. Phases 1 (exploration: `notebooks/00_exploracao.ipynb`, `docs/adr/0001-chave-e-historico-das-solicitacoes.md`) 2 (skeleton + CI), 3 (ingestion → Bronze), 4 (Pandera input contract) and 5 (dbt models) are done. Docs, comments and log messages are written in Portuguese.
+Data-engineering portfolio project over Curitiba's open data (SIAC 156 citizen requests). Requirements live in `docs/data_siac_demanda.md`; the phased plan (and the source of truth for architecture/stack decisions) is `docs/data_siac_plano.md`. Phases 1 (exploration: `notebooks/00_exploracao.ipynb`, `docs/adr/0001-chave-e-historico-das-solicitacoes.md`) 2 (skeleton + CI), 3 (ingestion → Bronze), 4 (Pandera input contract), 5 (dbt models) and 6 (FastAPI) are done. Docs, comments and log messages are written in Portuguese.
 
 ## Environment
 
@@ -22,8 +22,9 @@ make format                           # ruff autofix + format
 uv run pytest tests/test_cli.py::test_version   # single test
 make ingest                           # real ingestion of the latest snapshot (network, ~13 s)
 make transform                        # dbt build over Bronze (~7 s); make docs → lineage HTML
+make api                              # FastAPI on :8000 (/docs)
 make explore                          # re-execute the exploration notebook (needs data/raw/)
-uv run pytest -m "not slow"           # skip the real dbt builds (~20 s)
+uv run pytest -m "not slow"           # skip real dbt builds and API tests (~30 s)
 ```
 
 pytest always runs with coverage and fails below 80% (`[tool.coverage.report]` in `pyproject.toml`). Ruff excludes `notebooks/`. To run dbt directly: `cd dbt/siac156 && CWBDATASIAC_DATA_DIR=$PWD/../../data uv run dbt build --project-dir . --profiles-dir .`
@@ -37,6 +38,10 @@ Tests never hit the network: `respx` mocks httpx, and `tests/conftest.py::make_c
 ## dbt architecture
 
 `cwbdatasiac transform` → `transform.py::run_dbt`, which invokes `dbtRunner` on `dbt/siac156` with `CWBDATASIAC_DATA_DIR` set to the absolute data dir; `profiles.yml` (warehouse path) and `_sources.yml` (Bronze `external_location` via `read_parquet(..., hive_partitioning = false)`) read it. A custom `generate_schema_name` makes schemas plain `staging`/`intermediate`/`marts`/`seeds`. Marts read only the latest snapshot (`int_solicitacoes__ultimo_snapshot`), except dimensions and the incremental `fct_snapshot_agregado` (delete+insert by `snapshot_data`), which scan all snapshots. Data tests live on marts, not on staging, so build time does not grow with history. Integrity tests are `error`; quality rules the contract already tolerates are `warn`. The staging unit test uses `format: sql` for the source because an external Parquet source has no relation for dbt to introspect. dbt-duckdb keeps the DuckDB file open in-process after a run — open it with the same config (not `read_only`) in the same process.
+
+## API and warehouse concurrency
+
+`api/main.py::create_app(data_dir)` (module-level `app` reads `CWBDATASIAC_DATA_DIR`) serves marts and `controle` tables. `api/db.py::Warehouse.query` opens a **read-only DuckDB connection per query** and closes it; a `duckdb.IOException` (locked or missing file) becomes `WarehouseUnavailable` → 503 with `Retry-After`. DuckDB forbids readers in other processes while a writer holds the file and vice versa, so every **writer** goes through `warehouse_lock.py::retry_on_lock` (control.connect and `transform._invoke_waiting_for_lock`); lock errors are detected by message because dbt wraps the DuckDB exception. Never expose `logradouro` from the API. Routers build SQL only from fixed fragments; user input is always a bound parameter. API tests (`tests/api/`) build a real warehouse once per session by running dbt in a **subprocess** (in-process dbt would keep the file open and block read-only connections).
 
 ## Logging convention
 

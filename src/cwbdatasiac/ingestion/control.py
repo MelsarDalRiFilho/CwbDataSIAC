@@ -7,6 +7,7 @@ from pathlib import Path
 import duckdb
 
 from cwbdatasiac.validation.contracts import ResultadoContrato
+from cwbdatasiac.warehouse_lock import retry_on_lock
 
 DDL = """
 create schema if not exists controle;
@@ -59,7 +60,8 @@ _COLUMNS = [f.name for f in fields(Execucao)]
 
 def connect(path: Path) -> duckdb.DuckDBPyConnection:
     path.parent.mkdir(parents=True, exist_ok=True)
-    con = duckdb.connect(str(path))
+    # A API pode estar lendo o arquivo neste instante; esperamos o lock em vez de falhar.
+    con = retry_on_lock(lambda: duckdb.connect(str(path)))
     con.execute(DDL)
     return con
 

@@ -42,6 +42,7 @@ make ingest    # baixa o snapshot mais recente, valida e grava no Bronze
 make transform # dbt build: modelos e testes sobre a Bronze
 make docs      # documentação e linhagem do dbt (dbt/siac156/target/static_index.html)
 make pipeline  # ingest + transform
+make api       # API em http://127.0.0.1:8000 (documentação em /docs)
 uv run cwbdatasiac --help
 ```
 
@@ -79,6 +80,25 @@ Rodar de novo não duplica nada (status `sem_novidade`). Em caso de falha, o arq
 Os testes de integridade (chaves, relacionamentos, fato e agregado reproduzindo a Bronze) falham o
 build; os de qualidade que o contrato de entrada já tolera só avisam.
 
+### API
+
+`cwbdatasiac api` sobe uma FastAPI somente leitura sobre a camada Gold:
+
+| Rota | Conteúdo |
+| --- | --- |
+| `/health`, `/ingestoes`, `/qualidade` | operação: snapshot servido, execuções e violações do contrato |
+| `/solicitacoes` | solicitações do último snapshot, com filtros e paginação (sem endereço) |
+| `/indicadores/resumo` | KPIs: total, taxa de resposta, mediana de dias até a resposta e de pendência |
+| `/indicadores/serie-temporal` | criadas e respondidas por dia, semana ou mês |
+| `/indicadores/por-orgao`, `/por-assunto`, `/por-bairro` | rankings |
+| `/indicadores/tempo-resposta` | mediana, p90 e pendentes por órgão |
+| `/indicadores/historico-situacao` | situação das solicitações em cada snapshot |
+| `/indicadores/dia-semana-mes` | mapa de calor de mês × dia da semana |
+
+A API abre o DuckDB só para leitura e por poucos milissegundos a cada requisição. Enquanto o
+pipeline grava, ela responde `503` com `Retry-After`; do outro lado, a ingestão e o dbt esperam o
+lock em vez de falhar.
+
 Para reexecutar a exploração, baixe os arquivos para `data/raw/` (instruções no início do notebook) e rode `make explore`.
 
 ## Andamento
@@ -90,14 +110,14 @@ Para reexecutar a exploração, baixe os arquivos para `data/raw/` (instruções
 | 3. Ingestão, validação da execução e Bronze | ✅ |
 | 4. Contrato e validação de entrada | ✅ |
 | 5. dbt | ✅ |
-| 6. FastAPI | ⏳ |
+| 6. FastAPI | ✅ |
 | 7. Dashboard ECharts e relatório | ⏳ |
 | 8. Automação e vitrine | ⏳ |
 
 ## Estrutura
 
 ```
-src/cwbdatasiac/      código do pipeline (CLI typer, ingestão, contrato, logging estruturado)
+src/cwbdatasiac/      código do pipeline (CLI, ingestão, contrato, dbt runner, API, logging)
 dbt/siac156/          projeto dbt (staging, marts, seeds, testes)
 tests/                testes pytest (inclui dbt build sobre Bronze sintética)
 notebooks/            exploração da fonte
