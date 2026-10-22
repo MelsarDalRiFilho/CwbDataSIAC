@@ -13,3 +13,4 @@ _aux_dev
 dbt/siac156/target/
 dbt/siac156/logs/
 dbt/siac156/dbt_packages/
+dbt/siac156/.user.yml
