@@ -48,6 +48,12 @@ def ingest(
     navegador: Annotated[
         bool, typer.Option(help="Usa o Playwright como último recurso de descoberta.")
     ] = True,
+    tolerancia_contrato: Annotated[
+        float,
+        typer.Option(
+            min=0.0, max=1.0, help="Fração máxima de linhas que violam regras bloqueantes."
+        ),
+    ] = 0.001,
 ) -> None:
     """Baixa o snapshot do SIAC 156, valida e grava na camada Bronze."""
     settings = IngestSettings(
@@ -55,6 +61,7 @@ def ingest(
         min_bytes=min_bytes,
         keep_raw_days=manter_csv_dias,
         use_browser=navegador,
+        contract_tolerance=tolerancia_contrato,
     )
     with httpx.Client(
         timeout=settings.timeout_s, follow_redirects=True, headers={"User-Agent": USER_AGENT}

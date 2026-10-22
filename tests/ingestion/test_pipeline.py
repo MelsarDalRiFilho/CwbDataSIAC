@@ -11,7 +11,7 @@ from cwbdatasiac.ingestion import bronze, control
 from cwbdatasiac.ingestion.pipeline import prune_raw, run_ingestion
 from cwbdatasiac.observability import configure_logging
 from cwbdatasiac.observability.logging import LOG_FILE_NAME
-from tests.conftest import HEADER, make_csv, make_manifest
+from tests.conftest import HEADER, ROW, make_csv, make_manifest
 
 D19 = "2026-10-19_156_-_Base_de_Dados.csv"
 D20 = "2026-10-20_156_-_Base_de_Dados.csv"
@@ -171,3 +171,55 @@ def test_prune_raw_keeps_most_recent_dates(settings):
         "2026-10-20_156_-_Base_de_Dados.csv",
         "outro.csv",
     ]
+
+
+def _csv_with_bad_rows(good: int, bad: int) -> bytes:
+    """`bad` linhas sem Tipo (obrigatório) depois de `good` linhas válidas."""
+    bad_row = ";" + ROW.split(";", 1)[1]
+    return make_csv(rows=good) + (bad_row + "\r\n").encode("utf-8") * bad
+
+
+def _violations(settings):
+    with control.connect(settings.warehouse_path) as con:
+        return con.execute(
+            "select regra, coluna, severidade, linhas from controle.contrato_violacoes"
+        ).fetchall()
+
+
+def test_contract_violation_above_tolerance_blocks_load(settings, mock_source):
+    _serve(mock_source, URL20, _csv_with_bad_rows(good=9, bad=1))
+    strict = settings.__class__(**{**settings.__dict__, "contract_tolerance": 0.05})
+
+    execucao = _ingest(strict)
+
+    assert (execucao.status, execucao.etapa_falha) == ("falha", "contrato")
+    assert "1 de 10 linhas inválidas" in execucao.mensagem
+    assert not bronze.partition_path(strict.bronze_dir, date(2026, 10, 20)).exists()
+    assert (strict.quarantine_dir / f"{execucao.run_id}_{D20}").exists()
+    assert _violations(strict) == [("not_nullable", "Tipo", "bloqueante", 1)]
+    [report] = strict.quality_dir.glob("contrato_2026-10-20_*.json")
+    assert json.loads(report.read_text())["bloqueado"] is True
+    assert str(report) in execucao.mensagem
+
+
+def test_contract_violation_within_tolerance_loads_and_reports(settings, mock_source, caplog):
+    _serve(mock_source, URL20, _csv_with_bad_rows(good=9, bad=1))
+    lenient = settings.__class__(**{**settings.__dict__, "contract_tolerance": 0.2})
+
+    with caplog.at_level(logging.WARNING):
+        execucao = _ingest(lenient)
+
+    assert execucao.status == "sucesso"
+    assert execucao.linhas == 10
+    assert any(r.message == "violação do contrato de entrada" for r in caplog.records)
+    [report] = lenient.quality_dir.glob("*.json")
+    assert json.loads(report.read_text())["linhas_invalidas"] == 1
+
+
+def test_clean_snapshot_writes_no_contract_report(settings, mock_source):
+    _serve(mock_source, URL20, make_csv(rows=5))
+
+    _ingest(settings)
+
+    assert _violations(settings) == []
+    assert not settings.quality_dir.exists()

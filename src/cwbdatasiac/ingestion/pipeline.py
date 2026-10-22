@@ -1,13 +1,15 @@
-"""Orquestra a ingestão: descoberta → download → checagens → Bronze → controle.
+"""Orquestra a ingestão: descoberta → download → checagens → contrato → Bronze → controle.
 
 Cada execução tem um `run_id`, aparece no log e numa linha de
 `controle.ingestao_execucoes`. Falhas não levantam exceção: viram status
 `falha` com a etapa e o motivo, e o CLI traduz isso em exit code ≠ 0.
 """
 
+import json
 import logging
 import shutil
 from datetime import UTC, date, datetime
+from pathlib import Path
 
 import httpx
 import pyarrow as pa
@@ -18,6 +20,7 @@ from cwbdatasiac.ingestion.discovery import FILE_NAME_RE, Strategy, default_stra
 from cwbdatasiac.ingestion.download import download
 from cwbdatasiac.ingestion.errors import CheckError, IngestionError
 from cwbdatasiac.observability import run_context
+from cwbdatasiac.validation import contracts
 
 log = logging.getLogger(__name__)
 
@@ -127,6 +130,11 @@ def _run(
     execucao.linhas = table.num_rows
     checks.check_volume(table.num_rows, remote.snapshot_date, previous and previous[:2])
 
+    resultado = contracts.validate(table, remote.snapshot_date, settings.contract_tolerance)
+    report = _record_contract(settings, execucao.run_id, resultado)
+    if resultado.bloqueado:
+        raise CheckError("contrato", f"contrato violado: {resultado.resumo()}; relatório: {report}")
+
     path = bronze.write_bronze(table, settings.bronze_dir, remote.snapshot_date)
     log.info(
         "partição bronze gravada",
@@ -136,6 +144,37 @@ def _run(
 
     if removed := prune_raw(settings):
         log.info("CSVs antigos removidos do raw", extra={"etapa": "retencao", "arquivos": removed})
+
+
+def _record_contract(
+    settings: IngestSettings, run_id: str, resultado: contracts.ResultadoContrato
+) -> Path | None:
+    """Registra as violações (log, tabela de controle e relatório JSON); None se não houver."""
+    if not resultado.violacoes:
+        log.info("contrato de entrada aprovado", extra={"etapa": "contrato"})
+        return None
+
+    for v in resultado.violacoes:
+        log.warning(
+            "violação do contrato de entrada",
+            extra={
+                "etapa": "contrato",
+                "regra": v.regra,
+                "coluna": v.coluna,
+                "severidade": v.severidade,
+                "linhas": v.linhas,
+            },
+        )
+    with control.connect(settings.warehouse_path) as con:
+        control.save_violations(con, run_id, resultado)
+
+    settings.quality_dir.mkdir(parents=True, exist_ok=True)
+    report = settings.quality_dir / f"contrato_{resultado.snapshot_data}_{run_id}.json"
+    report.write_text(
+        json.dumps({"run_id": run_id, **resultado.to_dict()}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return report
 
 
 def _fail(

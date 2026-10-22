@@ -53,17 +53,17 @@ flowchart LR
     A[Portal / espelho C3SL<br/>156.xml + CSV] --> B[Captura<br/>httpx + tenacity<br/>Playwright opcional]
     B --> C{Validação da<br/>execução}
     C -- falha --> Q[Quarentena + log<br/>exit code ≠ 0]
-    C -- ok --> D[Bronze<br/>CSV + Parquet]
-    D --> E{Contrato<br/>Pandera}
-    E -- falha --> Q
-    E -- ok --> F[DuckDB + dbt<br/>staging → intermediate → marts]
+    C -- ok --> E{Contrato<br/>Pandera}
+    E -- violação acima<br/>da tolerância --> Q
+    E -- ok --> D[Bronze<br/>Parquet]
+    D --> F[DuckDB + dbt<br/>staging → intermediate → marts]
     F --> G[FastAPI]
     G --> H[Dashboard ECharts]
     F --> I[Relatório Quarto<br/>+ dbt docs]
     F --> J[JSON estático<br/>GitHub Pages]
 
     subgraph Transversal
-        L[Logs JSON + tabela ingestao_execucoes]
+        L[Logs JSON + tabelas de controle]
         O[Makefile / GitHub Actions]
     end
 ```
@@ -104,6 +104,21 @@ A demanda pede que a camada de obtenção valide se o serviço foi executado cor
 | Integridade | sha256 igual ao do último snapshot carregado → a fonte não atualizou: `sem_novidade` (não é erro) | log `WARNING` |
 | Leitura | CSV parseável pelo Arrow (nº de colunas consistente) | quarentena + log `ERROR`, etapa `leitura` |
 | Volume | linhas > 0 e ≥ snapshot anterior (arquivo acumulado do ano), exceto na virada do ano | quarentena + log `ERROR`, carga não promovida |
+| Contrato | regras Pandera (seção abaixo); fração de linhas inválidas ≤ tolerância (padrão 0,1%) | quarentena + relatório + log `ERROR`, etapa `contrato` |
+
+**Contrato de entrada** (`validation/contracts.py`), aplicado antes de gravar a Bronze:
+
+| Regra | Colunas | Severidade |
+| --- | --- | --- |
+| `not_nullable` | Tipo, Orgao, DataCriacao, Assunto, Subdivisao, Situacao, Origem. Bairro e Logradouro aceitam nulo, apesar do dicionário, porque a fonte tem nulos legítimos | bloqueante |
+| `data_valida` | DataCriacao, DataResposta no formato `dd/mm/aaaa` e datas existentes | bloqueante |
+| `data_no_ano_do_snapshot` | datas entre 1º/jan do ano do snapshot e a data do snapshot | bloqueante |
+| `resposta_apos_criacao` | DataResposta ≥ DataCriacao (ignora datas já inválidas) | bloqueante |
+| tipo das colunas | todas texto | bloqueante, sempre, independentemente da tolerância |
+| `dominio_conhecido` | Tipo, Situacao, Origem e Regional nos valores conhecidos | alerta: carrega, registra e avisa (um canal novo é legítimo) |
+
+- Linhas inválidas abaixo da tolerância (`--tolerancia-contrato`, padrão 0,001) são carregadas como vieram, porque não descartamos linhas (ADR 0001), e ficam registradas.
+- Toda violação vai para o log (`WARNING`), para a tabela `controle.contrato_violacoes` e para o relatório `data/qualidade/contrato_<snapshot>_<run_id>.json`. Os exemplos mostram só as colunas da regra; `Logradouro` nunca aparece (LGPD).
 
 - **Logging estruturado** com `logging` da stdlib e formatter JSON (ou `structlog`), configurado em `observability/logging.py`. A saída vai para o console e para um arquivo rotativo em `logs/`, com `run_id`, etapa, duração e contexto em todas as mensagens.
 - **Tabela de controle `ingestao_execucoes`** no DuckDB: `run_id`, início, fim, status (`sucesso`, `sem_novidade`, `falha`), etapa da falha, mensagem, bytes, linhas e sha256. A API a expõe em `/ingestoes`.
@@ -161,7 +176,7 @@ CwbDataSIAC/
 │   └── fixtures/              # amostra do CSV (válida e quebrada)
 ├── docs/                      # demanda, plano, diagramas, decisões (ADRs)
 ├── logs/                      # ignorado no git
-└── data/                      # ignorado no git: bronze/, quarentena/, warehouse.duckdb
+└── data/                      # ignorado no git: raw/, bronze/, quarentena/, qualidade/, warehouse.duckdb
 ```
 
 ## Fases de execução
@@ -171,7 +186,7 @@ Oito fases curtas, cada uma terminando num commit que funciona sozinho. Assim o 
 1. **Exploração e decisões.** Baixar 2 ou 3 arquivos diários seguidos e o dicionário; perfilar encoding, separador, nulos, cardinalidade e formato das datas; testar se existe uma combinação de colunas que identifica a solicitação. *Pronto quando:* notebook de exploração e um ADR com a chave escolhida. **✅ Concluída em 21/10/2026:** `notebooks/00_exploracao.ipynb` e `docs/adr/0001-chave-e-historico-das-solicitacoes.md`; o Python 3.12 e o grupo `explore` já foram antecipados no `pyproject.toml`.
 2. **Esqueleto e CI.** `uv`, `ruff`, `pytest` + `pytest-cov`, pre-commit, configuração de logging, Makefile, workflow de CI, README inicial. *Pronto quando:* CI verde num repositório vazio de lógica. **✅ Concluída em 21/10/2026:** CLI `cwbdatasiac` (typer), logging JSON com `run_id` em `observability/logging.py`, ruff, pytest com cobertura mínima de 80%, pre-commit, `Makefile` e `.github/workflows/ci.yml`.
 3. **Ingestão, validação da execução e Bronze.** Descoberta pelo manifesto, download com retry e checksum, checagens pós-captura, tabela `ingestao_execucoes`, conversão para Parquet, módulo Playwright opcional como estratégia alternativa. Carga histórica opcional pelo espelho C3SL. *Pronto quando:* `make ingest` é idempotente (rodar duas vezes não duplica) e uma falha simulada (HTTP 500, arquivo truncado, coluna faltando) gera log, registro `falha` e exit code ≠ 0. **✅ Concluída em 21/10/2026:** `cwbdatasiac ingest` / `make ingest`, validado contra a fonte real (cerca de 13 s por carga) e com 50 testes (99% de cobertura). A carga histórica foi adiada: os arquivos antigos têm outro layout e serão tratados depois do dbt.
-4. **Contrato e validação de entrada.** Schema Pandera (colunas, tipos, datas válidas, domínios de Situação e Origem); carga rejeitada vai para quarentena com relatório. *Pronto quando:* um CSV com coluna faltando falha com mensagem clara.
+4. **Contrato e validação de entrada.** Schema Pandera (colunas, tipos, datas válidas, domínios de Situação e Origem); carga rejeitada vai para quarentena com relatório. *Pronto quando:* um CSV com coluna faltando falha com mensagem clara. **✅ Concluída em 22/10/2026:** contrato com severidade bloqueante ou de alerta e tolerância percentual; a coluna faltando já é barrada pela checagem de cabeçalho da fase 3. O snapshot real de 21/10 (629.180 linhas) passou com 0 violações, e a validação leva cerca de 0,6 s. São 69 testes, com 99% de cobertura.
 5. **dbt.** Staging, dimensões, fato do último snapshot, histórico agregado incremental e agregados; testes `not_null`, `unique`, `accepted_values`, `relationships` e regras como `DataResposta >= DataCriacao`; `dbt docs`. *Pronto quando:* `dbt build` verde e linhagem publicada.
 6. **FastAPI.** Conexão somente leitura ao DuckDB, modelos Pydantic, filtros, paginação, testes com `TestClient`. *Pronto quando:* `/docs` mostra todos os endpoints e os testes passam.
 7. **Dashboard ECharts e relatório.** Painel consumindo a API localmente e JSON estático no GitHub Pages; relatório Quarto com 5 a 8 achados (assuntos mais demandados, bairros, tempo de resposta por órgão, sazonalidade). *Pronto quando:* link público do dashboard funcionando.
@@ -196,6 +211,7 @@ O maior risco técnico é a falta de identificador, e ele vira um bom tema para 
 - Descoberta em cadeia: manifesto C3SL → portal JSON (`httpx`) → Playwright opcional.
 - Bronze guarda o Parquet de todo snapshot e o CSV bruto só das 3 datas mais recentes (`--manter-csv-dias`).
 - Carga histórica (2014–2025) adiada para depois da fase 5.
+- Contrato: valores novos de domínio só geram alerta; regras estruturais bloqueiam acima de 0,1% de linhas inválidas.
 - Sem chave por solicitação: fato do último snapshot + histórico agregado incremental ([ADR 0001](adr/0001-chave-e-historico-das-solicitacoes.md)).
 
 **Decisões em aberto** (minhas recomendações entre parênteses):

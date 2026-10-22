@@ -8,6 +8,8 @@ authors = [{ name = "Melsar José Dal Ri Filho", email = "melsar.filho@gmail.com
 dependencies = [
     "duckdb>=2.0.0",
     "httpx>=0.28.1",
+    "pandas>=3.0.6",
+    "pandera[pandas]>=0.34.1",
     "pyarrow>=26.0.0",
     "tenacity>=9.2.1",
     "typer>=0.27.3",

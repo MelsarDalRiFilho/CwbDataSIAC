@@ -1,10 +1,12 @@
-"""Tabela de controle `controle.ingestao_execucoes` no DuckDB do warehouse."""
+"""Tabelas de controle no DuckDB do warehouse: execuções da ingestão e violações do contrato."""
 
 from dataclasses import dataclass, fields
 from datetime import date, datetime
 from pathlib import Path
 
 import duckdb
+
+from cwbdatasiac.validation.contracts import ResultadoContrato
 
 DDL = """
 create schema if not exists controle;
@@ -22,6 +24,15 @@ create table if not exists controle.ingestao_execucoes (
     bytes             bigint,
     linhas            bigint,
     sha256            varchar
+);
+create table if not exists controle.contrato_violacoes (
+    run_id         varchar not null,
+    snapshot_data  date not null,
+    regra          varchar not null,
+    coluna         varchar,
+    severidade     varchar not null,  -- bloqueante | alerta
+    linhas         bigint not null,
+    exemplos       varchar[]
 );
 """
 
@@ -84,3 +95,15 @@ def success_for(con: duckdb.DuckDBPyConnection, snapshot_date: date) -> bool:
         [snapshot_date],
     ).fetchone()
     return bool(row and row[0])
+
+
+def save_violations(
+    con: duckdb.DuckDBPyConnection, run_id: str, resultado: ResultadoContrato
+) -> None:
+    con.executemany(
+        "insert into controle.contrato_violacoes values (?, ?, ?, ?, ?, ?, ?)",
+        [
+            [run_id, resultado.snapshot_data, v.regra, v.coluna, v.severidade, v.linhas, v.exemplos]
+            for v in resultado.violacoes
+        ],
+    )

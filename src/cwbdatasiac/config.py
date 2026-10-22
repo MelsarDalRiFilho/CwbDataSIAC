@@ -38,6 +38,8 @@ class IngestSettings:
     timeout_s: float = 120.0
     retry_attempts: int = 3
     retry_wait_s: float = 2.0
+    # Fração máxima de linhas que podem violar regras bloqueantes do contrato.
+    contract_tolerance: float = 0.001
 
     @property
     def raw_dir(self) -> Path:
@@ -50,6 +52,10 @@ class IngestSettings:
     @property
     def quarantine_dir(self) -> Path:
         return self.data_dir / "quarentena"
+
+    @property
+    def quality_dir(self) -> Path:
+        return self.data_dir / "qualidade"
 
     @property
     def warehouse_path(self) -> Path:

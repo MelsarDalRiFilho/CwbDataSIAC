@@ -23,9 +23,9 @@ Apache ECharts.
 ```mermaid
 flowchart LR
     A[Espelho C3SL<br/>156.xml + CSV] --> B[Captura + validação<br/>da execução]
-    B --> C[Bronze<br/>Parquet]
-    C --> D[Contrato<br/>Pandera]
-    D --> E[DuckDB + dbt]
+    B --> D[Contrato<br/>Pandera]
+    D --> C[Bronze<br/>Parquet]
+    C --> E[DuckDB + dbt]
     E --> F[FastAPI]
     F --> G[Dashboard ECharts]
     E --> H[Relatório]
@@ -52,7 +52,11 @@ o mesmo `run_id` e numa linha da tabela `controle.ingestao_execucoes` (`data/war
 2. **Download** com retry e backoff em erros 5xx e de rede, sha256 e escrita atômica.
 3. **Checagens:** tipo e tamanho do conteúdo, BOM UTF-8, colunas do cabeçalho, conteúdo idêntico ao
    snapshot anterior e volume (o arquivo acumula o ano, então não pode encolher).
-4. **Bronze:** Parquet em `data/bronze/siac156/snapshot_data=AAAA-MM-DD/`. O CSV bruto é mantido
+4. **Contrato de entrada (Pandera):** obrigatórios, datas válidas e dentro do ano do snapshot,
+   resposta ≥ criação (bloqueantes, com tolerância de 0,1% de linhas) e domínios conhecidos de Tipo,
+   Situação, Origem e Regional (só alerta). As violações vão para o log, para
+   `controle.contrato_violacoes` e para um relatório JSON em `data/qualidade/`.
+5. **Bronze:** Parquet em `data/bronze/siac156/snapshot_data=AAAA-MM-DD/`. O CSV bruto é mantido
    só para as 3 datas mais recentes.
 
 Rodar de novo não duplica nada (status `sem_novidade`). Em caso de falha, o arquivo vai para
@@ -67,7 +71,7 @@ Para reexecutar a exploração, baixe os arquivos para `data/raw/` (instruções
 | 1. Exploração e decisões | ✅ |
 | 2. Esqueleto e CI | ✅ |
 | 3. Ingestão, validação da execução e Bronze | ✅ |
-| 4. Contrato e validação de entrada | ⏳ |
+| 4. Contrato e validação de entrada | ✅ |
 | 5. dbt | ⏳ |
 | 6. FastAPI | ⏳ |
 | 7. Dashboard ECharts e relatório | ⏳ |
@@ -76,7 +80,7 @@ Para reexecutar a exploração, baixe os arquivos para `data/raw/` (instruções
 ## Estrutura
 
 ```
-src/cwbdatasiac/      código do pipeline (CLI typer, ingestão, logging estruturado)
+src/cwbdatasiac/      código do pipeline (CLI typer, ingestão, contrato, logging estruturado)
 tests/                testes pytest
 notebooks/            exploração da fonte
 docs/                 demanda, plano e decisões (ADRs)
